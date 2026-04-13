@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/
+data/
+assets/emoji_svg/
+assets/emoji_svg.zip
+assets/NotoSansSC-Bold.ttf

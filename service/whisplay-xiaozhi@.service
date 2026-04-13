@@ -1,0 +1,16 @@
+[Unit]
+Description=Whisplay XiaoZhi AI Voice Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/home/%i/whisplay-xiaozhi
+ExecStart=/home/%i/whisplay-xiaozhi/venv/bin/python3 /home/%i/whisplay-xiaozhi/main.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
