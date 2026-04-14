@@ -136,8 +136,8 @@ sudo journalctl -u whisplay-xiaozhi@pi -f
 This project implements the XiaoZhi ESP32 WebSocket protocol v1:
 - [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)
 - [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi)
-- OTA activation: Device registers via HTTP, user binds with verification code
-- WebSocket: Hello handshake + Opus audio streaming + JSON control messages
+- [OTA activation](https://my.feishu.cn/wiki/FjW6wZmisimNBBkov6OcmfvknVd) Device registers via HTTP, user binds with verification code
+- [WebSocket](https://my.feishu.cn/wiki/M0XiwldO9iJwHikpXD5cEx71nKh) Hello handshake + Opus audio streaming + JSON control messages
 
 ## License
 
