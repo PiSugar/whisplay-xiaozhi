@@ -193,21 +193,29 @@ class Application:
             await self._connect()
             return
 
-        # Check if device has been paired before
-        creds = OtaClient.load_credentials()
-        if not creds:
-            # Need to pair: run OTA activation flow
-            await self._run_activation()
+        # Always check with OTA server first to verify device is still paired.
+        # If server says activation needed, saved credentials are stale.
+        log.info("checking device status with OTA server...")
+        try:
+            paired = await asyncio.get_event_loop().run_in_executor(
+                None, self.ota.check_version
+            )
+            if paired:
+                log.info("OTA confirmed device is paired")
+                # OtaClient.check_version already saved fresh credentials
+                creds = OtaClient.load_credentials()
+            else:
+                # Server requires (re-)activation — clear stale credentials
+                log.info("OTA requires activation, entering pairing flow")
+                await self._run_activation()
+                creds = OtaClient.load_credentials()
+        except Exception as e:
+            log.warning("OTA check failed: %s, falling back to saved credentials", e)
             creds = OtaClient.load_credentials()
 
         if not creds:
             log.error("no credentials available after activation")
             return
-
-        # Use saved WebSocket credentials directly if available.
-        # OTA refresh would overwrite with potentially different device identity.
-        if creds.get("ws_url"):
-            log.info("using saved WebSocket credentials")
 
         # Choose protocol: WebSocket preferred (matching py-xiaozhi).
         # MQTT as fallback if no WebSocket credentials.

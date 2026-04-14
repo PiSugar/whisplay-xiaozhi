@@ -76,15 +76,15 @@ def _load_or_create_efuse() -> dict:
 
 
 def _get_mac() -> str:
-    """Get device MAC address (with colons, uppercase) matching ESP32 format."""
+    """Get device MAC address (lowercase with colons, matching py-xiaozhi)."""
     for iface in ("wlan0", "eth0"):
         try:
             with open(f"/sys/class/net/{iface}/address") as f:
-                return f.read().strip().upper()
+                return f.read().strip().lower()
         except Exception:
             pass
     # Fallback: generate a random MAC-like identifier
-    h = uuid.uuid4().hex[:12].upper()
+    h = uuid.uuid4().hex[:12].lower()
     return ":".join(h[i:i+2] for i in range(0, 12, 2))
 
 
