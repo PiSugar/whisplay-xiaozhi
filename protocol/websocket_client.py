@@ -44,6 +44,7 @@ class XiaoZhiClient:
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._session_id: str | None = None
         self._connected = False
+        self._goodbye_received = False
 
         # Connection credentials (set before connect)
         self.ws_url: str = ""
@@ -61,6 +62,7 @@ class XiaoZhiClient:
         self.on_listen_stop: asyncio.coroutine | None = None  # server VAD stop
         self.on_mcp: asyncio.coroutine | None = None        # (payload: dict)
         self.on_iot: asyncio.coroutine | None = None         # (commands: list)
+        self.on_goodbye: asyncio.coroutine | None = None     # server ends session
         self.on_disconnected: asyncio.coroutine | None = None
 
     @property
@@ -140,6 +142,7 @@ class XiaoZhiClient:
         """Close WebSocket connection."""
         self._connected = False
         self._session_id = None
+        self._goodbye_received = False
         if self._ws:
             try:
                 await self._ws.close()
@@ -167,7 +170,9 @@ class XiaoZhiClient:
             log.error("receive error: %s", e)
         finally:
             self._connected = False
-            if self.on_disconnected:
+            if self._goodbye_received:
+                log.info("session ended by goodbye, not triggering reconnect")
+            elif self.on_disconnected:
                 await self.on_disconnected()
 
     async def _handle_json(self, raw: str):
@@ -217,6 +222,12 @@ class XiaoZhiClient:
             commands = data.get("commands", [])
             if commands and self.on_iot:
                 await self.on_iot(commands)
+
+        elif msg_type == "goodbye":
+            log.info("server sent goodbye, session ending")
+            self._goodbye_received = True
+            if self.on_goodbye:
+                await self.on_goodbye()
 
         elif msg_type == "hello":
             # Late hello (reconnect scenario)

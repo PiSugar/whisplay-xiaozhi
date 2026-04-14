@@ -78,6 +78,7 @@ class Application:
         self._reconnecting = False  # Prevent concurrent reconnect storms
         self._loop: asyncio.AbstractEventLoop | None = None
         self._keep_listening = False  # Auto-restart listening after TTS
+        self._listen_after_connect = False  # Auto-start listening after reconnect
 
     @property
     def state(self) -> str:
@@ -248,6 +249,7 @@ class Application:
         self.client.on_listen_stop = self._on_listen_stop
         self.client.on_mcp = self._on_mcp
         self.client.on_iot = self._on_iot
+        self.client.on_goodbye = self._on_goodbye
         self.client.on_disconnected = self._on_disconnected
 
     async def _run_activation(self):
@@ -335,6 +337,12 @@ class Application:
 
                 # Start receive loop
                 self._receive_task = asyncio.create_task(self.client.receive_loop())
+
+                # If button was pressed before reconnect, auto-start listening
+                if self._listen_after_connect:
+                    self._listen_after_connect = False
+                    self._keep_listening = True
+                    await self._start_listening()
                 return
             except Exception as e:
                 log.warning("connect failed (%d/%d): %s, retrying in %ds", attempt, max_retries, e, retry_delay)
@@ -350,11 +358,33 @@ class Application:
             self._set_state(self.IDLE)
             self._update_display(status="Disconnected", emoji="❌", text="Press button to retry...")
 
+    async def _on_goodbye(self):
+        """Server sent goodbye — session ended gracefully. Don't reconnect."""
+        log.info("goodbye received, ending conversation")
+        self._keep_listening = False
+        self.recorder.stop()
+        await self.player.stop()
+        self._set_state(self.IDLE)
+        self._update_display(status="Connected", emoji="😄", text="Press button to wake...")
+
     async def _on_disconnected(self):
         """Handle server disconnection."""
         if not self._running or self._reconnecting:
             return
-        await self._reconnect()
+        # If server ended session (goodbye or graceful close), just go idle
+        if self.client and getattr(self.client, '_goodbye_received', False):
+            log.info("session ended gracefully, not reconnecting")
+            self._set_state(self.IDLE)
+            self._update_display(status="Idle", emoji="\U0001f604", text="Press button to wake...")
+            return
+        # Only auto-reconnect if user was actively interacting
+        if self._state in (self.LISTENING, self.SPEAKING):
+            await self._reconnect()
+        else:
+            # Idle disconnect (server timeout) — wait for button press
+            log.info("idle disconnect, waiting for button press to reconnect")
+            self._set_state(self.IDLE)
+            self._update_display(status="Idle", emoji="\U0001f604", text="Press button to wake...")
 
     async def _reconnect(self):
         """Reconnect to server (called from disconnect handler or button press)."""
@@ -389,9 +419,10 @@ class Application:
         pass
 
     async def _handle_button_press(self):
-        # If disconnected, trigger reconnect
+        # If disconnected, trigger reconnect and auto-listen after
         if not self.client or not self.client.connected:
             if not self._reconnecting:
+                self._listen_after_connect = True
                 asyncio.create_task(self._reconnect())
             return
 
@@ -422,6 +453,10 @@ class Application:
             log.warning("send listen_start failed: %s", e)
             self._keep_listening = False
             self._set_state(self.IDLE)
+            self._update_display(status="Idle", emoji="😄", text="Press button to wake...")
+            # Server closed connection after TTS — treat as graceful goodbye
+            if self.client:
+                self.client._goodbye_received = True
             return
         self.recorder.start()
         self._recording_task = asyncio.create_task(self._stream_audio())
