@@ -3,6 +3,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Application version
+APP_VERSION = "1.0.0"
+
 
 def _get(key: str, default: str = "") -> str:
     return os.getenv(key, default).strip()

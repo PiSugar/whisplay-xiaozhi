@@ -92,7 +92,14 @@ def _get_mac() -> str:
 _BOARD_TYPE = "raspberrypi"
 _APPLICATION_NAME = "whisplay-xiaozhi"
 _USER_AGENT_APP_NAME = "whisplay-xiaozhi"
-_APP_VERSION = "2.0.0"
+
+# Import version from central config (lazy to avoid circular imports)
+def _get_app_version() -> str:
+    try:
+        import config
+        return config.APP_VERSION
+    except Exception:
+        return "1.0.0"
 
 
 def _get_local_ip() -> str:
@@ -107,7 +114,7 @@ def _get_local_ip() -> str:
 
 def _get_user_agent() -> str:
     """Build a user-agent string matching py-xiaozhi format."""
-    return f"{_BOARD_TYPE}/{_USER_AGENT_APP_NAME}-{_APP_VERSION}"
+    return f"{_BOARD_TYPE}/{_USER_AGENT_APP_NAME}-{_get_app_version()}"
 
 
 class OtaClient:
@@ -186,7 +193,7 @@ class OtaClient:
             "Content-Type": "application/json",
             "User-Agent": _get_user_agent(),
             "Accept-Language": "zh-CN",
-            "Activation-Version": _APP_VERSION,
+            "Activation-Version": _get_app_version(),
         }
 
     # ==================== Check Version ====================
@@ -205,7 +212,7 @@ class OtaClient:
         hmac_key = self.efuse.get("hmac_key", "unknown")
         body = {
             "application": {
-                "version": _APP_VERSION,
+                "version": _get_app_version(),
                 "elf_sha256": hmac_key,
             },
             "board": {

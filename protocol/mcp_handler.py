@@ -9,6 +9,8 @@ callable tools that can be invoked by the LLM.
 import logging
 from typing import Any, Callable
 
+import config
+
 log = logging.getLogger("mcp")
 
 # Tool function: (params: dict) -> dict
@@ -47,7 +49,7 @@ class McpHandler:
             return rpc_id, {
                 "protocolVersion": params.get("protocolVersion", "2024-11-05"),
                 "capabilities": {"tools": {"listChanged": True}},
-                "serverInfo": {"name": "whisplay", "version": "1.0.0"},
+                "serverInfo": {"name": "whisplay-xiaozhi", "version": config.APP_VERSION},
             }
 
         # Handle tools/list — return our registered tools
