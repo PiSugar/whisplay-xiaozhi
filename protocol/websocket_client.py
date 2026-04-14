@@ -295,10 +295,21 @@ class XiaoZhiClient:
 
     async def send_iot_descriptors(self, descriptors: list):
         """Send IoT thing descriptors to the server."""
+        for desc in descriptors:
+            await self._send_json({
+                "session_id": self._session_id,
+                "type": "iot",
+                "update": True,
+                "descriptors": [desc],
+            })
+
+    async def send_iot_states(self, states: list):
+        """Send IoT thing states to the server."""
         await self._send_json({
             "session_id": self._session_id,
             "type": "iot",
-            "descriptors": descriptors,
+            "update": True,
+            "states": states,
         })
 
     # ==================== Internals ====================

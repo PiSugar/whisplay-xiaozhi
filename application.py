@@ -31,6 +31,8 @@ from protocol.websocket_client import XiaoZhiClient
 from protocol.mqtt_client import XiaoZhiMqttClient
 from protocol.mcp_handler import McpHandler
 from protocol.ota_client import OtaClient
+from iot.thing_manager import ThingManager
+from iot.things.speaker import Speaker
 
 log = logging.getLogger("app")
 
@@ -59,6 +61,10 @@ class Application:
         self.player = AudioPlayer()
         self.encoder = OpusEncoder(frame_duration_ms=60)
         self.decoder = OpusDecoder(frame_duration_ms=60)
+
+        # IoT
+        self.thing_manager = ThingManager()
+        self.thing_manager.register(Speaker())
 
         # Protocol
         self.ota = OtaClient(
@@ -346,6 +352,9 @@ class Application:
                 # Start receive loop
                 self._receive_task = asyncio.create_task(self.client.receive_loop())
 
+                # Send IoT descriptors and initial states
+                await self._send_iot_descriptors()
+
                 # If button was pressed before reconnect, auto-start listening
                 if self._listen_after_connect:
                     self._listen_after_connect = False
@@ -572,7 +581,31 @@ class Application:
     async def _on_iot(self, commands: list):
         """Handle IoT commands from server."""
         log.info("IoT commands: %s", commands)
-        # IoT Thing handling to be implemented in iot/ module
+        for cmd in commands:
+            try:
+                await self.thing_manager.invoke(cmd)
+            except Exception as e:
+                log.error("IoT command error: %s", e)
+        # Send updated states back to server
+        try:
+            changed, states = await self.thing_manager.get_states(delta=True)
+            if changed and self.client and self.client.connected:
+                await self.client.send_iot_states(states)
+        except Exception as e:
+            log.error("IoT state update error: %s", e)
+
+    # ==================== IoT Helpers ====================
+    async def _send_iot_descriptors(self):
+        """Send IoT thing descriptors and initial states to server."""
+        if not self.client or not self.client.connected:
+            return
+        try:
+            descriptors = self.thing_manager.get_descriptors()
+            await self.client.send_iot_descriptors(descriptors)
+            _, states = await self.thing_manager.get_states(delta=False)
+            await self.client.send_iot_states(states)
+        except Exception as e:
+            log.error("send IoT descriptors error: %s", e)
 
     # ==================== Display Helpers ====================
     def _update_display(self, **kwargs):
