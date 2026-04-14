@@ -46,7 +46,7 @@ class McpHandler:
             log.info("MCP initialize from server (id=%s)", rpc_id)
             return rpc_id, {
                 "protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                "capabilities": {},
+                "capabilities": {"tools": {"listChanged": True}},
                 "serverInfo": {"name": "whisplay", "version": "1.0.0"},
             }
 

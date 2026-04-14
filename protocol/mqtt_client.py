@@ -24,6 +24,16 @@ import config
 
 log = logging.getLogger("protocol.mqtt")
 
+# Emotion name → emoji character mapping (from XiaoZhi protocol docs)
+_EMOTION_TO_EMOJI = {
+    "neutral": "😶", "happy": "🙂", "laughing": "😆", "funny": "😂",
+    "sad": "😔", "angry": "😠", "crying": "😭", "loving": "😍",
+    "embarrassed": "😳", "surprised": "😲", "shocked": "😱", "thinking": "🤔",
+    "winking": "😉", "cool": "😎", "relaxed": "😌", "delicious": "🤤",
+    "kissy": "😘", "confident": "😏", "sleepy": "😴", "silly": "😜",
+    "confused": "🙄", "smile": "😊",
+}
+
 
 class XiaoZhiMqttClient:
     """Async XiaoZhi MQTT + UDP client."""
@@ -59,6 +69,7 @@ class XiaoZhiMqttClient:
         # Async event loop reference
         self._loop: asyncio.AbstractEventLoop | None = None
         self._hello_event: asyncio.Event | None = None
+        self._mcp_complete: asyncio.Event | None = None
         self._pending_messages: list[dict] = []
 
         # Callbacks — same interface as XiaoZhiClient
@@ -87,6 +98,7 @@ class XiaoZhiMqttClient:
 
         self._loop = asyncio.get_running_loop()
         self._hello_event = asyncio.Event()
+        self._mcp_complete = asyncio.Event()
         self._is_closing = False
         self._pending_messages = []
 
@@ -104,18 +116,14 @@ class XiaoZhiMqttClient:
             self._mqtt = None
 
         # Handle subscribe_topic "null" string (server convention)
-        # Gateway sends responses to devices/p2p/<device_id> where
-        # device_id is extracted from mqtt_client_id: GID_test@@@<device_id>@@@<uuid>
+        # Alibaba Cloud MQ uses P2P mechanism to deliver messages directly
+        # to the target client without explicit subscription (matching py-xiaozhi)
         effective_subscribe = self.subscribe_topic
-        if effective_subscribe == "null" or not effective_subscribe:
-            # Derive P2P topic from client_id
-            parts = self.mqtt_client_id.split("@@@")
-            if len(parts) >= 2:
-                device_tag = parts[1]  # e.g. "2C_CF_67_D8_C4_DF"
-                effective_subscribe = f"devices/p2p/{device_tag}"
-                log.info("derived subscribe topic: %s", effective_subscribe)
-            else:
-                effective_subscribe = None
+        if not effective_subscribe:
+            effective_subscribe = None
+            log.info("no subscribe_topic, relying on P2P auto-delivery")
+        elif effective_subscribe == "null":
+            log.info("subscribe_topic is 'null', subscribing to literal topic (matching py-xiaozhi)")
 
         # Create MQTT client (compatible with paho-mqtt v1 and v2)
         # Must use MQTT v3.1.1 (xiaozhi broker doesn't support v5)
@@ -150,12 +158,12 @@ class XiaoZhiMqttClient:
         # Setup callbacks
         connect_future = self._loop.create_future()
 
-        # Pre-build hello message so it can be sent instantly from on_connect
+        # Pre-build hello message
         hello = json.dumps({
             "type": "hello",
             "version": 3,
-            "features": {"mcp": True},
             "transport": "udp",
+            "features": {"mcp": True},
             "audio_params": {
                 "format": "opus",
                 "sample_rate": config.AUDIO_INPUT_SAMPLE_RATE,
@@ -169,11 +177,14 @@ class XiaoZhiMqttClient:
                 log.info("MQTT connected to %s:%d", host, port)
                 # Subscribe immediately in on_connect callback (per paho best practice)
                 if effective_subscribe:
-                    client.subscribe(effective_subscribe, qos=0)
-                    log.info("subscribed to %s", effective_subscribe)
-                # Send hello IMMEDIATELY in callback — server may disconnect within ms
-                result = client.publish(self.publish_topic, hello, qos=0)
-                log.info("hello published in on_connect (mid=%s)", result.mid)
+                    client.subscribe(effective_subscribe, qos=1)
+                    log.info("subscribed to %s (qos=1)", effective_subscribe)
+                # Do NOT send hello here — wait for gateway's MCP handshake
+                # to complete first.  The gateway runs initializeDeviceTools()
+                # on MQTT connect, caching our MCP tool list.  If we send
+                # hello before the cache is ready, the gateway's bridge to
+                # the chat server fails (chat server gets empty MCP data and
+                # sends goodbye instead of hello).
                 self._loop.call_soon_threadsafe(
                     lambda: connect_future.set_result(True) if not connect_future.done() else None
                 )
@@ -214,7 +225,7 @@ class XiaoZhiMqttClient:
         self._mqtt.connect_async(host, port, keepalive=60)
         self._mqtt.loop_start()
 
-        # Wait for connection (hello is sent in on_connect callback)
+        # Wait for connection
         try:
             await asyncio.wait_for(connect_future, timeout=15.0)
         except asyncio.TimeoutError:
@@ -222,9 +233,24 @@ class XiaoZhiMqttClient:
             self._mqtt.loop_stop()
             raise ConnectionError("MQTT connection timeout")
 
-        log.info("hello sent, waiting for server hello...")
+        # Wait for gateway's MCP handshake to complete before sending hello.
+        # The gateway calls initializeDeviceTools() on MQTT connect which
+        # sends MCP initialize + tools/list requests.  We must respond to
+        # those BEFORE sending hello so the gateway has our tool cache ready
+        # when it creates the WebSocket bridge to the chat server.
+        log.info("waiting for gateway MCP handshake...")
+        try:
+            await asyncio.wait_for(self._mcp_complete.wait(), timeout=5.0)
+            log.info("MCP handshake complete, sending hello")
+        except asyncio.TimeoutError:
+            log.warning("MCP handshake timeout (gateway may not support MCP), sending hello anyway")
+
+        # Now send hello
+        result = self._mqtt.publish(self.publish_topic, hello, qos=0)
+        log.info("hello published (mid=%s)", result.mid)
 
         # Wait for server hello
+        log.info("waiting for server hello...")
         try:
             await asyncio.wait_for(self._hello_event.wait(), timeout=10.0)
         except asyncio.TimeoutError:
@@ -320,8 +346,14 @@ class XiaoZhiMqttClient:
                 log.warning("ignoring goodbye before hello (our_session=%s, msg_session=%s)", self._session_id, session_id)
             return
 
-        # Dispatch JSON messages via callbacks (same as WebSocket client)
-        # Queue messages until hello handshake completes (MCP responses can interfere)
+        # MCP messages must be dispatched immediately — even during hello
+        # handshake.  The server sends MCP initialize before hello and expects
+        # a response before it will send hello back.
+        if msg_type == "mcp":
+            self._dispatch_json(data)
+            return
+
+        # Queue other non-hello/goodbye messages until hello handshake completes.
         if not self._connected:
             self._pending_messages.append(data)
             log.debug("queued message (hello pending): type=%s", msg_type)
@@ -347,7 +379,9 @@ class XiaoZhiMqttClient:
                 _run(self.on_listen_stop())
 
         elif msg_type == "llm":
-            emoji = data.get("emotion")
+            # Server sends {"type":"llm", "text":"😊", "emotion":"smile"}
+            # Prefer the emoji character from "text", fall back to mapping "emotion" name
+            emoji = data.get("text") or _EMOTION_TO_EMOJI.get(data.get("emotion", ""), data.get("emotion"))
             if emoji and self.on_llm_emotion:
                 _run(self.on_llm_emotion(emoji))
 
@@ -478,12 +512,36 @@ class XiaoZhiMqttClient:
             },
         })
 
+    async def send_mcp_notification(self, method: str, params: dict | None = None):
+        """Send an MCP notification (no id, no response expected)."""
+        payload: dict = {
+            "jsonrpc": "2.0",
+            "method": method,
+        }
+        if params is not None:
+            payload["params"] = params
+        await self._send_json({"type": "mcp", "payload": payload})
+
     async def send_iot_descriptors(self, descriptors: list):
         await self._send_json({
             "session_id": self._session_id,
             "type": "iot",
             "descriptors": descriptors,
         })
+
+    async def receive_loop(self):
+        """Keep alive until disconnect. Paho loop_start handles actual receiving."""
+        try:
+            while self._mqtt and not self._is_closing:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+
+    def mark_mcp_complete(self):
+        """Signal that MCP handshake is done, so hello can be sent."""
+        log.info("MCP handshake complete, unblocking hello")
+        if self._loop and self._mcp_complete:
+            self._loop.call_soon_threadsafe(self._mcp_complete.set)
 
     # ==================== Internals ====================
     async def _send_json(self, obj: dict):
@@ -492,8 +550,8 @@ class XiaoZhiMqttClient:
     def _mqtt_publish(self, message: str) -> bool:
         if self._mqtt and self.publish_topic:
             try:
+                log.info("MQTT send [%s]: %s", self.publish_topic, message[:300])
                 result = self._mqtt.publish(self.publish_topic, message, qos=0)
-                # QoS 0 has no PUBACK — just check rc
                 if result.rc != mqtt.MQTT_ERR_SUCCESS:
                     log.error("MQTT publish error rc=%d", result.rc)
                     return False

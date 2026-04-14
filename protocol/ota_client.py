@@ -88,9 +88,10 @@ def _get_mac() -> str:
     return ":".join(h[i:i+2] for i in range(0, 12, 2))
 
 
-# Match py-xiaozhi identifiers so the server recognises us
-_BOARD_TYPE = "bread-compact-wifi"
-_APP_NAME = "py-xiaozhi"
+# Match py-xiaozhi v2 activation format (confirmed working)
+_BOARD_TYPE = "pc"
+_APPLICATION_NAME = "py-xiaozhi"
+_USER_AGENT_APP_NAME = "py-xiaozhi"
 _APP_VERSION = "2.0.0"
 
 
@@ -106,7 +107,7 @@ def _get_local_ip() -> str:
 
 def _get_user_agent() -> str:
     """Build a user-agent string matching py-xiaozhi format."""
-    return f"{_BOARD_TYPE}/{_APP_NAME}-{_APP_VERSION}"
+    return f"{_BOARD_TYPE}/{_USER_AGENT_APP_NAME}-{_APP_VERSION}"
 
 
 class OtaClient:
@@ -145,7 +146,7 @@ class OtaClient:
             try:
                 data = json.loads(_CRED_FILE.read_text())
                 # Valid if we have either MQTT or WebSocket credentials
-                if data.get("mqtt_endpoint") or (data.get("ws_url") and data.get("ws_token")):
+                if data.get("mqtt_endpoint") or data.get("ws_url"):
                     return data
             except Exception as e:
                 log.warning("failed to load credentials: %s", e)
@@ -201,7 +202,6 @@ class OtaClient:
         url = self.ota_url
         headers = self._headers()
 
-        # Match py-xiaozhi payload format exactly
         hmac_key = self.efuse.get("hmac_key", "unknown")
         body = {
             "application": {
@@ -210,7 +210,7 @@ class OtaClient:
             },
             "board": {
                 "type": _BOARD_TYPE,
-                "name": _APP_NAME,
+                "name": _APPLICATION_NAME,
                 "ip": _get_local_ip(),
                 "mac": self.device_id,
             },
@@ -268,7 +268,7 @@ class OtaClient:
             return False
 
         # Paired if we have WebSocket config or MQTT config
-        has_ws = bool(self.ws_url and self.ws_token)
+        has_ws = bool(self.ws_url)
         has_mqtt = bool(self.mqtt_endpoint and self.mqtt_username and self.mqtt_password)
 
         if has_mqtt or has_ws:

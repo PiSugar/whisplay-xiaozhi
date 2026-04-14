@@ -13,6 +13,7 @@ Reference: https://github.com/78/xiaozhi-esp32 websocket.md
 import asyncio
 import json
 import logging
+import ssl
 import uuid
 
 import websockets
@@ -20,7 +21,20 @@ import websockets.exceptions
 
 import config
 
+# Disable SSL verification for self-signed certificates (matches py-xiaozhi)
+_ssl_context = ssl._create_unverified_context()
+
 log = logging.getLogger("protocol")
+
+# Emotion name → emoji character mapping (from XiaoZhi protocol docs)
+_EMOTION_TO_EMOJI = {
+    "neutral": "😶", "happy": "🙂", "laughing": "😆", "funny": "😂",
+    "sad": "😔", "angry": "😠", "crying": "😭", "loving": "😍",
+    "embarrassed": "😳", "surprised": "😲", "shocked": "😱", "thinking": "🤔",
+    "winking": "😉", "cool": "😎", "relaxed": "😌", "delicious": "🤤",
+    "kissy": "😘", "confident": "😏", "sleepy": "😴", "silly": "😜",
+    "confused": "🙄", "smile": "😊",
+}
 
 
 class XiaoZhiClient:
@@ -56,22 +70,29 @@ class XiaoZhiClient:
     # ==================== Connection ====================
     async def connect(self):
         """Connect to XiaoZhi server and perform hello handshake."""
-        if not self.ws_url or not self.ws_token:
-            raise ValueError("ws_url and ws_token must be set before connect")
+        if not self.ws_url:
+            raise ValueError("ws_url must be set before connect")
         headers = {
-            "Authorization": f"Bearer {self.ws_token}",
+            "Authorization": f"Bearer {self.ws_token}" if self.ws_token else "Bearer ",
             "Protocol-Version": "1",
             "Device-Id": self.device_id or config.DEVICE_ID or self._get_mac(),
             "Client-Id": self.client_id or config.CLIENT_ID,
         }
         log.info("connecting to %s", self.ws_url)
+
+        # Use unverified SSL for wss:// (matches py-xiaozhi)
+        ws_ssl = _ssl_context if self.ws_url.startswith("wss://") else None
+
         try:
             self._ws = await websockets.connect(
                 self.ws_url,
+                ssl=ws_ssl,
                 additional_headers=headers,
-                ping_interval=30,
-                ping_timeout=10,
-                max_size=2**20,
+                ping_interval=20,
+                ping_timeout=20,
+                close_timeout=10,
+                max_size=10 * 1024 * 1024,
+                compression=None,
             )
         except Exception as e:
             log.error("connection failed: %s", e)
@@ -82,6 +103,7 @@ class XiaoZhiClient:
             "type": "hello",
             "version": 1,
             "transport": "websocket",
+            "features": {"mcp": True},
             "audio_params": {
                 "format": "opus",
                 "sample_rate": config.AUDIO_INPUT_SAMPLE_RATE,
@@ -168,7 +190,9 @@ class XiaoZhiClient:
                 await self.on_listen_stop()
 
         elif msg_type == "llm":
-            emoji = data.get("emotion")
+            # Server sends {"type":"llm", "text":"😊", "emotion":"smile"}
+            # Prefer emoji char from "text", fall back to mapping "emotion" name
+            emoji = data.get("text") or _EMOTION_TO_EMOJI.get(data.get("emotion", ""), data.get("emotion"))
             if emoji and self.on_llm_emotion:
                 await self.on_llm_emotion(emoji)
 
@@ -237,11 +261,25 @@ class XiaoZhiClient:
         await self._send_json({
             "session_id": self._session_id,
             "type": "mcp",
-            "data": {
+            "payload": {
                 "jsonrpc": "2.0",
                 "id": mcp_id,
                 "result": result,
             },
+        })
+
+    async def send_mcp_notification(self, method: str, params: dict | None = None):
+        """Send an MCP notification (no id, no response expected)."""
+        payload: dict = {
+            "jsonrpc": "2.0",
+            "method": method,
+        }
+        if params is not None:
+            payload["params"] = params
+        await self._send_json({
+            "session_id": self._session_id,
+            "type": "mcp",
+            "payload": payload,
         })
 
     async def send_iot_descriptors(self, descriptors: list):

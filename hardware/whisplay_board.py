@@ -529,9 +529,15 @@ class WhisplayBoard:
 
         if self.platform == "rpi":
             if hasattr(self, '_lgpio_cb'):
-                self._lgpio_cb.cancel()
+                try:
+                    self._lgpio_cb.cancel()
+                except Exception:
+                    pass
             if hasattr(self, '_lgpio_h'):
-                lgpio.gpiochip_close(self._lgpio_h)
+                try:
+                    lgpio.gpiochip_close(self._lgpio_h)
+                except Exception:
+                    pass
         elif self.platform == "radxa":
             self._btn_thread_running = False
             if hasattr(self, "_btn_thread") and self._btn_thread:

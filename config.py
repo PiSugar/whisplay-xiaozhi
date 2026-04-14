@@ -31,6 +31,11 @@ OTA_URL = _get("XIAOZHI_OTA_URL", "https://api.tenclass.net/xiaozhi/ota/")
 DEVICE_ID = _get("XIAOZHI_DEVICE_ID")
 CLIENT_ID = _get("XIAOZHI_CLIENT_ID")
 
+# Direct WebSocket connection (bypasses OTA activation entirely)
+# Set both to connect directly to a self-hosted xiaozhi-esp32-server.
+WS_URL = _get("XIAOZHI_WS_URL")    # e.g., ws://192.168.1.100:8000/xiaozhi/v1/
+WS_TOKEN = _get("XIAOZHI_WS_TOKEN")  # auth token (empty string if auth disabled)
+
 # Audio
 ALSA_INPUT_DEVICE = _get("ALSA_INPUT_DEVICE", "default")
 ALSA_OUTPUT_DEVICE = _get("ALSA_OUTPUT_DEVICE", "default")

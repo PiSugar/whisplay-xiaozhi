@@ -76,6 +76,7 @@ class Application:
         self._running = False
         self._tts_text_buffer: str = ""
         self._reconnecting = False  # Prevent concurrent reconnect storms
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def state(self) -> str:
@@ -92,6 +93,7 @@ class Application:
     async def start(self):
         """Initialize hardware and start all subsystems."""
         self._running = True
+        self._loop = asyncio.get_running_loop()
 
         # Init hardware
         try:
@@ -154,9 +156,11 @@ class Application:
 
     # ==================== Activation & Connection ====================
     async def _activate_and_connect(self):
-        """Ensure device is paired, then connect (MQTT preferred, WebSocket fallback).
+        """Ensure device is paired, then connect (WebSocket preferred, MQTT fallback).
 
-        MQTT credentials rotate per OTA request, so we always fetch fresh ones.
+        If XIAOZHI_WS_URL is configured, connect directly without OTA.
+        Otherwise, use OTA to obtain credentials (MQTT credentials rotate per
+        OTA request, so we always fetch fresh ones).
         """
         # Clean up old client before creating a new one
         if self.client:
@@ -171,6 +175,19 @@ class Application:
             self._receive_task.cancel()
             self._receive_task = None
 
+        # Direct WebSocket mode — bypass OTA entirely
+        if config.WS_URL:
+            log.info("using direct WebSocket: %s", config.WS_URL)
+            client = XiaoZhiClient()
+            client.ws_url = config.WS_URL
+            client.ws_token = config.WS_TOKEN or ""
+            client.device_id = config.DEVICE_ID or self.ota.device_id
+            client.client_id = config.CLIENT_ID or self.ota.client_id
+            self.client = client
+            self._wire_callbacks()
+            await self._connect()
+            return
+
         # Check if device has been paired before
         creds = OtaClient.load_credentials()
         if not creds:
@@ -182,19 +199,22 @@ class Application:
             log.error("no credentials available after activation")
             return
 
-        # Always fetch fresh MQTT credentials (they rotate per request)
-        log.info("fetching fresh credentials from OTA...")
-        try:
-            paired = await asyncio.get_event_loop().run_in_executor(
-                None, self.ota.check_version
-            )
-            if paired:
-                creds = OtaClient.load_credentials()
-        except Exception as e:
-            log.warning("failed to refresh credentials, using saved: %s", e)
+        # Use saved WebSocket credentials directly if available.
+        # OTA refresh would overwrite with potentially different device identity.
+        if creds.get("ws_url"):
+            log.info("using saved WebSocket credentials")
 
-        # Choose protocol: MQTT preferred (server returns placeholder ws_token), WebSocket as fallback
-        if creds.get("mqtt_endpoint") and creds.get("mqtt_publish_topic"):
+        # Choose protocol: WebSocket preferred (matching py-xiaozhi).
+        # MQTT as fallback if no WebSocket credentials.
+        if creds.get("ws_url"):
+            ws_token = creds.get("ws_token") or "test-token"
+            log.info("using WebSocket transport (url=%s)", creds["ws_url"])
+            client = XiaoZhiClient()
+            client.ws_url = creds["ws_url"]
+            client.ws_token = ws_token
+            client.device_id = creds.get("device_id", "")
+            client.client_id = creds.get("client_id", "")
+        elif creds.get("mqtt_endpoint") and creds.get("mqtt_publish_topic"):
             log.info("using MQTT transport (endpoint=%s)", creds["mqtt_endpoint"])
             client = XiaoZhiMqttClient()
             client.endpoint = creds["mqtt_endpoint"]
@@ -203,13 +223,6 @@ class Application:
             client.password = creds.get("mqtt_password", "")
             client.publish_topic = creds.get("mqtt_publish_topic", "")
             client.subscribe_topic = creds.get("mqtt_subscribe_topic")
-            client.device_id = creds.get("device_id", "")
-            client.client_id = creds.get("client_id", "")
-        elif creds.get("ws_url") and creds.get("ws_token"):
-            log.info("using WebSocket transport")
-            client = XiaoZhiClient()
-            client.ws_url = creds["ws_url"]
-            client.ws_token = creds["ws_token"]
             client.device_id = creds.get("device_id", "")
             client.client_id = creds.get("client_id", "")
         else:
@@ -342,9 +355,10 @@ class Application:
     # ==================== Button Events ====================
     def _on_button_press(self):
         """Button pressed — wake: start auto-listen or abort TTS."""
-        asyncio.get_event_loop().call_soon_threadsafe(
-            asyncio.ensure_future, self._handle_button_press()
-        )
+        if self._loop:
+            self._loop.call_soon_threadsafe(
+                asyncio.ensure_future, self._handle_button_press()
+            )
 
     def _on_button_release(self):
         """Button released — no-op in push-to-wake mode."""
@@ -444,11 +458,28 @@ class Application:
         self._update_display(status="Connected", emoji="😄")
 
     async def _on_mcp(self, payload: dict):
-        """Handle MCP tool call from server."""
+        """Handle MCP tool call from server.
+
+        The device acts as MCP SERVER; the gateway is the MCP CLIENT.
+        We only respond to requests (with an id).  We must NOT send
+        notifications/initialized back — that notification flows from
+        client→server in MCP, and the gateway already sends it to us.
+        Sending it back causes the gateway to forward it to
+        parseOtherMessage where it triggers a spurious goodbye (no
+        matching pending request, bridge is null).
+        """
         result = await self.mcp.handle(payload)
         if result:
             mcp_id, response = result
             await self.client.send_mcp_response(mcp_id, response)
+
+            # Signal that MCP handshake is complete after tools/list response.
+            # This unblocks the MQTT client's hello message — the gateway
+            # needs our tool cache populated before we trigger bridge creation.
+            rpc = payload.get("payload", {})
+            method = rpc.get("method", "")
+            if method == "tools/list" and hasattr(self.client, "mark_mcp_complete"):
+                self.client.mark_mcp_complete()
 
     async def _on_iot(self, commands: list):
         """Handle IoT commands from server."""
