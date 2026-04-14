@@ -204,6 +204,7 @@ class WhisplayBoard:
         self._current_b = 0
         self.button_press_callback = None
         self.button_release_callback = None
+        self._cleaned_up = False
 
         if self.platform == "rpi":
             self._init_rpi()
@@ -211,6 +212,10 @@ class WhisplayBoard:
             self._init_radxa()
         else:
             raise RuntimeError(f"Unsupported platform: {self.platform} (no GPIO library found)")
+
+        # Register atexit handler as safety net for GPIO cleanup
+        import atexit
+        atexit.register(self._atexit_cleanup)
 
         self.previous_frame = None
         self._detect_hardware_version()
@@ -519,20 +524,48 @@ class WhisplayBoard:
                 self.button_release_callback()
 
     # ==================== Cleanup ====================
+    def _atexit_cleanup(self):
+        """Safety net: release GPIO on interpreter exit if cleanup() wasn't called."""
+        if not self._cleaned_up:
+            self.cleanup()
+
     def cleanup(self):
-        if self.backlight_pwm is not None:
-            self.backlight_pwm.stop()
-        self.spi.close()
-        self.red_pwm.stop()
-        self.green_pwm.stop()
-        self.blue_pwm.stop()
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
+
+        # Stop PWM threads
+        for pwm in ("backlight_pwm", "red_pwm", "green_pwm", "blue_pwm"):
+            obj = getattr(self, pwm, None)
+            if obj is not None:
+                try:
+                    obj.stop()
+                except Exception:
+                    pass
+
+        # Close SPI
+        if hasattr(self, "spi") and self.spi:
+            try:
+                self.spi.close()
+            except Exception:
+                pass
 
         if self.platform == "rpi":
+            # Cancel button callback first
             if hasattr(self, '_lgpio_cb'):
                 try:
                     self._lgpio_cb.cancel()
                 except Exception:
                     pass
+            # Free all claimed GPIO pins before closing chip
+            if hasattr(self, '_lgpio_h') and hasattr(self, '_bcm'):
+                h = self._lgpio_h
+                for pin, gpio in self._bcm.items():
+                    try:
+                        lgpio.gpio_free(h, gpio)
+                    except Exception:
+                        pass
+            # Close chip handle
             if hasattr(self, '_lgpio_h'):
                 try:
                     lgpio.gpiochip_close(self._lgpio_h)

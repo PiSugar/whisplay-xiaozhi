@@ -24,6 +24,12 @@ class AudioPlayer:
 
     def start(self):
         """Start sox playback subprocess and writer task."""
+        # Clean up any previous writer task
+        if self._task and not self._task.done():
+            self._task.cancel()
+            self._task = None
+        # Drain leftover queue
+        self._queue = asyncio.Queue()
         cmd = [
             "sox",
             "-t", "raw",

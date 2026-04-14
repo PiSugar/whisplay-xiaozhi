@@ -88,10 +88,10 @@ def _get_mac() -> str:
     return ":".join(h[i:i+2] for i in range(0, 12, 2))
 
 
-# Match py-xiaozhi v2 activation format (confirmed working)
-_BOARD_TYPE = "pc"
-_APPLICATION_NAME = "py-xiaozhi"
-_USER_AGENT_APP_NAME = "py-xiaozhi"
+# Match whisplay-xiaozhi device identity
+_BOARD_TYPE = "raspberrypi"
+_APPLICATION_NAME = "whisplay-xiaozhi"
+_USER_AGENT_APP_NAME = "whisplay-xiaozhi"
 _APP_VERSION = "2.0.0"
 
 
@@ -146,7 +146,7 @@ class OtaClient:
             try:
                 data = json.loads(_CRED_FILE.read_text())
                 # Valid if we have either MQTT or WebSocket credentials
-                if data.get("mqtt_endpoint") or data.get("ws_url"):
+                if data.get("mqtt_endpoint") or (data.get("ws_url") and data.get("ws_token")):
                     return data
             except Exception as e:
                 log.warning("failed to load credentials: %s", e)

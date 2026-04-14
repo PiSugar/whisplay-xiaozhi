@@ -57,7 +57,13 @@ async def main():
         await app.stop()
 
 
+_shutting_down = False
+
 async def shutdown(app: Application):
+    global _shutting_down
+    if _shutting_down:
+        return
+    _shutting_down = True
     log = logging.getLogger("main")
     log.info("shutting down...")
     await app.stop()

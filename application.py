@@ -132,7 +132,10 @@ class Application:
 
     async def stop(self):
         """Shutdown all subsystems."""
+        if not self._running:
+            return
         self._running = False
+        self._keep_listening = False
 
         # Cancel tasks
         if self._recording_task:
@@ -405,11 +408,21 @@ class Application:
     # ==================== Listening ====================
     async def _start_listening(self):
         """Enter auto-listen mode. Server VAD controls when listening ends."""
+        if not self.client or not self.client.connected:
+            self._keep_listening = False
+            self._set_state(self.IDLE)
+            return
         self._set_state(self.LISTENING)
         self._update_display(status="Listening...", emoji="🎤")
         self._tts_text_buffer = ""
 
-        await self.client.send_listen_start(mode="auto")
+        try:
+            await self.client.send_listen_start(mode="auto")
+        except Exception as e:
+            log.warning("send listen_start failed: %s", e)
+            self._keep_listening = False
+            self._set_state(self.IDLE)
+            return
         self.recorder.start()
         self._recording_task = asyncio.create_task(self._stream_audio())
 
