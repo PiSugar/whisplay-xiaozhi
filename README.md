@@ -2,6 +2,8 @@
 
 [中文版](README_CN.md)
 
+<img width="200" alt="68747470733a2f2f646f63732e706973756761722e636f6d2f696d672f77686973706c61795f6c6f676f4034782d382e706e67" src="https://github.com/user-attachments/assets/b168a14c-71d4-473d-9fd9-196802bfc5e9" />
+
 XiaoZhi AI voice client for Raspberry Pi + Whisplay HAT + PiSugar battery.
 
 Connects to the [XiaoZhi AI platform](https://xiaozhi.me) via WebSocket, providing a complete voice interaction pipeline: ASR (speech recognition), LLM (language model), and TTS (text-to-speech) — all in a pocket-sized device.
