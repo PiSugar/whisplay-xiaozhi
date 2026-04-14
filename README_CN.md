@@ -135,6 +135,7 @@ sudo journalctl -u whisplay-xiaozhi@pi -f
 
 本项目实现了小智 ESP32 WebSocket 协议 v1：
 - [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32)
+- [py-xiaozhi](https://github.com/huangjunsen0406/py-xiaozhi)
 - 协议文档: WebSocket 连接 + Hello 握手 + Opus 音频流 + JSON 控制消息
 
 ## License

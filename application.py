@@ -77,6 +77,7 @@ class Application:
         self._tts_text_buffer: str = ""
         self._reconnecting = False  # Prevent concurrent reconnect storms
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._keep_listening = False  # Auto-restart listening after TTS
 
     @property
     def state(self) -> str:
@@ -320,7 +321,10 @@ class Application:
         self._update_display(status="Connecting...", emoji="🔄")
 
         retry_delay = 2
-        while self._running:
+        max_retries = 10
+        attempt = 0
+        while self._running and attempt < max_retries:
+            attempt += 1
             try:
                 await self.client.connect()
                 self._set_state(self.IDLE)
@@ -330,25 +334,42 @@ class Application:
                 self._receive_task = asyncio.create_task(self.client.receive_loop())
                 return
             except Exception as e:
-                log.warning("connect failed: %s, retrying in %ds", e, retry_delay)
+                log.warning("connect failed (%d/%d): %s, retrying in %ds", attempt, max_retries, e, retry_delay)
                 self._update_display(
                     status="Disconnected", emoji="❌",
-                    text=f"Connection failed, retrying in {retry_delay}s...\n{e}"
+                    text=f"Retry {attempt}/{max_retries} in {retry_delay}s...\n{e}"
                 )
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 30)
+
+        if self._running:
+            log.error("connect failed after %d attempts", max_retries)
+            self._set_state(self.IDLE)
+            self._update_display(status="Disconnected", emoji="❌", text="Press button to retry...")
 
     async def _on_disconnected(self):
         """Handle server disconnection."""
         if not self._running or self._reconnecting:
             return
+        await self._reconnect()
+
+    async def _reconnect(self):
+        """Reconnect to server (called from disconnect handler or button press)."""
+        if self._reconnecting:
+            return
         self._reconnecting = True
+        self._keep_listening = False
         try:
             log.warning("disconnected from server, reconnecting...")
             self.recorder.stop()
             await self.player.stop()
+            self._set_state(self.IDLE)
+            self._update_display(status="Reconnecting...", emoji="🔄", text="")
             await asyncio.sleep(2)  # Brief delay before reconnecting
             await self._activate_and_connect()
+        except Exception as e:
+            log.error("reconnect failed: %s", e)
+            self._update_display(status="Disconnected", emoji="❌", text=str(e))
         finally:
             self._reconnecting = False
 
@@ -365,15 +386,20 @@ class Application:
         pass
 
     async def _handle_button_press(self):
+        # If disconnected, trigger reconnect
         if not self.client or not self.client.connected:
+            if not self._reconnecting:
+                asyncio.create_task(self._reconnect())
             return
 
         if self._state == self.SPEAKING:
             # Abort current TTS and start new listen
+            self._keep_listening = False
             await self.client.send_abort()
             await self.player.stop()
 
         if self._state in (self.IDLE, self.SPEAKING):
+            self._keep_listening = True  # Enable auto-listen cycle
             await self._start_listening()
 
     # ==================== Listening ====================
@@ -418,6 +444,9 @@ class Application:
         if self._state == self.LISTENING:
             await self._stop_listening()
             self._update_display(status="Thinking...", emoji="\U0001f914")
+        elif self._state == self.IDLE:
+            # Server sent listen stop while idle — end of conversation
+            self._keep_listening = False
 
     async def _on_stt(self, text: str):
         """Received ASR result from server."""
@@ -452,10 +481,13 @@ class Application:
         self._update_display(text=self._tts_text_buffer)
 
     async def _on_tts_stop(self):
-        """TTS playback finished."""
+        """TTS playback finished. Auto-restart listening if in conversation."""
         await self.player.stop()
-        self._set_state(self.IDLE)
-        self._update_display(status="Connected", emoji="😄")
+        if self._keep_listening and self.client and self.client.connected:
+            await self._start_listening()
+        else:
+            self._set_state(self.IDLE)
+            self._update_display(status="Connected", emoji="😄")
 
     async def _on_mcp(self, payload: dict):
         """Handle MCP tool call from server.
@@ -510,4 +542,5 @@ class Application:
             await self.client.send_abort()
             await self.player.stop()
         if self._state in (self.IDLE, self.SPEAKING):
+            self._keep_listening = True
             await self._start_listening()
