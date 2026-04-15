@@ -2,6 +2,8 @@
 
 [English](README.md)
 
+<img width="200" alt="68747470733a2f2f646f63732e706973756761722e636f6d2f696d672f77686973706c61795f6c6f676f4034782d382e706e67" src="https://github.com/user-attachments/assets/b168a14c-71d4-473d-9fd9-196802bfc5e9" />
+
 基于树莓派 + Whisplay HAT + PiSugar 电池的小智AI语音客户端。
 
 通过 WebSocket 连接[小智AI平台](https://xiaozhi.me)，实现完整的语音交互流程：语音识别（ASR）、大模型对话（LLM）、语音合成（TTS），一个口袋大小的AI语音助手。

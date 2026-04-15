@@ -15,6 +15,7 @@ echo "=== Installing system dependencies ==="
 sudo apt-get update
 sudo apt-get install -y \
     python3 python3-venv python3-pip \
+    python3-lgpio \
     sox libsox-fmt-all \
     libopus0 libopus-dev \
     libcairo2-dev libgirepository1.0-dev \

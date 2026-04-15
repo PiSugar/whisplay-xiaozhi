@@ -523,10 +523,20 @@ class XiaoZhiMqttClient:
         await self._send_json({"type": "mcp", "payload": payload})
 
     async def send_iot_descriptors(self, descriptors: list):
+        for desc in descriptors:
+            await self._send_json({
+                "session_id": self._session_id,
+                "type": "iot",
+                "update": True,
+                "descriptors": [desc],
+            })
+
+    async def send_iot_states(self, states: list):
         await self._send_json({
             "session_id": self._session_id,
             "type": "iot",
-            "descriptors": descriptors,
+            "update": True,
+            "states": states,
         })
 
     async def receive_loop(self):
