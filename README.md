@@ -13,9 +13,10 @@ Connects to the [XiaoZhi AI platform](https://xiaozhi.me) via WebSocket, providi
 - **WebSocket Voice Conversation** — XiaoZhi protocol v1 with Opus audio codec
 - **Auto Pairing** — Device shows a verification code on LCD; enter it on xiaozhi.me to bind (no token needed)
 - **Push-to-Wake** — Button press wakes the device and starts auto-listening (server-side VAD controls when speech ends)
-- **LCD Display** — 240×280 ST7789V showing status, emoji, scrolling text, and battery level
+- **LCD Display** — 240×280 ST7789V showing status, emoji, scrolling text, Wi-Fi signal, and battery level
 - **RGB LED** — Automatic color changes based on state (idle / listening / thinking / speaking / error)
 - **Battery Monitor** — Real-time PiSugar battery level display
+- **whisplay-daemon Ready** — Auto-adapts to daemon framebuffer / button / LED mode when available
 - **Wake Word** — Hands-free activation via openwakeword
 - **MCP Support** — Server-side tool invocation (JSON-RPC 2.0)
 
@@ -47,6 +48,8 @@ cp .env.template .env
 ```
 
 Most settings work out of the box. The device will auto-detect its MAC address and pair with the server.
+
+If the system provides `whisplay-daemon`, register this project as a daemon app entry (`app_id: whisplay-xiaozhi`) and launch it from daemon app management.
 
 ### 3. Run
 
@@ -132,6 +135,8 @@ sudo systemctl start whisplay-xiaozhi@pi
 # View logs
 sudo journalctl -u whisplay-xiaozhi@pi -f
 ```
+
+If `whisplay-daemon` is already running, use the daemon-registered `whisplay-xiaozhi` app entry instead of installing the standalone service with `startup.sh`.
 
 ## Protocol Reference
 

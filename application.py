@@ -17,12 +17,15 @@ Coordinates: WhisplayBoard, UIRenderer, AudioRecorder, AudioPlayer,
 
 import asyncio
 import logging
+import os
 import signal
+from typing import Any
 
 import config
-from hardware.whisplay_board import WhisplayBoard
 from hardware.battery import BatteryMonitor
+from hardware.network import NetworkMonitor
 from hardware.led_controller import LedController
+from hardware.whisplay_daemon import create_whisplay_hardware
 from display.ui_renderer import UIRenderer
 from audio.audio_codec import OpusEncoder, OpusDecoder
 from audio.audio_recorder import AudioRecorder
@@ -49,9 +52,10 @@ class Application:
 
     def __init__(self):
         # Hardware
-        self.board: WhisplayBoard | None = None
+        self.board: Any = None
         self.led: LedController | None = None
         self.battery = BatteryMonitor()
+        self.network = NetworkMonitor()
 
         # Display
         self.display: UIRenderer | None = None
@@ -105,7 +109,7 @@ class Application:
 
         # Init hardware
         try:
-            self.board = WhisplayBoard()
+            self.board = create_whisplay_hardware()
             self.led = LedController(self.board)
             self.led.set_state(self.IDLE)
         except Exception as e:
@@ -122,15 +126,20 @@ class Application:
         if self.board:
             self.board.on_button_press(self._on_button_press)
             self.board.on_button_release(self._on_button_release)
+            if hasattr(self.board, "on_exit_request"):
+                self.board.on_exit_request(self._on_exit_request)
+            if hasattr(self.board, "on_focus_revoked"):
+                self.board.on_focus_revoked(self._on_focus_revoked)
 
         # Start battery monitor
         await self.battery.start()
+        await self.network.start()
 
-        # Battery display update loop
-        asyncio.create_task(self._battery_display_loop())
+        # Status display update loops
+        asyncio.create_task(self._status_display_loop())
 
         # Update display
-        self._update_display(status="Whisplay XiaoZhi", text="Starting...")
+        self._update_display(status="xiaozhi", text="Starting...")
 
         # Activate (pair) and connect
         await self._activate_and_connect()
@@ -156,12 +165,21 @@ class Application:
         if self.client:
             await self.client.disconnect()
         await self.battery.stop()
+        await self.network.stop()
 
         if self.display:
             self.display.stop()
         if self.board:
-            self.board.set_backlight(0)
-            self.board.cleanup()
+            # In daemon mode, backlight is global and managed by daemon desktop.
+            if not getattr(self.board, "managed_by_daemon", False):
+                try:
+                    self.board.set_backlight(0)
+                except Exception as e:
+                    log.debug("set_backlight during shutdown failed: %s", e)
+            try:
+                self.board.cleanup()
+            except Exception as e:
+                log.debug("board cleanup during shutdown failed: %s", e)
 
         log.info("application stopped")
 
@@ -392,7 +410,7 @@ class Application:
         if self.client and getattr(self.client, '_goodbye_received', False):
             log.info("session ended gracefully, not reconnecting")
             self._set_state(self.IDLE)
-            self._update_display(status="Idle", emoji="\U0001f604", text="Press button to wake...")
+            self._update_display(status="xiaozhi", emoji="\U0001f604", text="Press button to wake...")
             return
         # Only auto-reconnect if user was actively interacting
         if self._state in (self.LISTENING, self.SPEAKING):
@@ -401,7 +419,7 @@ class Application:
             # Idle disconnect (server timeout) — wait for button press
             log.info("idle disconnect, waiting for button press to reconnect")
             self._set_state(self.IDLE)
-            self._update_display(status="Idle", emoji="\U0001f604", text="Press button to wake...")
+            self._update_display(status="xiaozhi", emoji="\U0001f604", text="Press button to wake...")
 
     async def _reconnect(self):
         """Reconnect to server (called from disconnect handler or button press)."""
@@ -434,6 +452,16 @@ class Application:
     def _on_button_release(self):
         """Button released — no-op in push-to-wake mode."""
         pass
+
+    def _on_exit_request(self):
+        """Daemon requested app exit (e.g. home/exit gesture)."""
+        log.info("exit requested by daemon, shutting down")
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    def _on_focus_revoked(self, _payload=None):
+        """Daemon revoked foreground focus; exit app process."""
+        log.info("focus revoked by daemon, shutting down")
+        os.kill(os.getpid(), signal.SIGTERM)
 
     async def _handle_button_press(self):
         # If disconnected, trigger reconnect and auto-listen after
@@ -470,7 +498,7 @@ class Application:
             log.warning("send listen_start failed: %s", e)
             self._keep_listening = False
             self._set_state(self.IDLE)
-            self._update_display(status="Idle", emoji="😄", text="Press button to wake...")
+            self._update_display(status="xiaozhi", emoji="😄", text="Press button to wake...")
             # Server closed connection after TTS — treat as graceful goodbye
             if self.client:
                 self.client._goodbye_received = True
@@ -612,14 +640,14 @@ class Application:
         if self.display:
             self.display.update(**kwargs)
 
-    async def _battery_display_loop(self):
-        """Periodically update battery display."""
+    async def _status_display_loop(self):
+        """Periodically update battery / network status in the header."""
         while self._running:
-            if self.battery.level >= 0:
-                self._update_display(
-                    battery_level=self.battery.level,
-                    battery_color=self.battery.get_color(),
-                )
+            self._update_display(
+                battery_level=self.battery.level,
+                battery_color=self.battery.get_color(),
+                wifi_signal_level=self.network.signal_level,
+            )
             await asyncio.sleep(config.BATTERY_POLL_INTERVAL)
 
     # ==================== Wake Word Trigger ====================

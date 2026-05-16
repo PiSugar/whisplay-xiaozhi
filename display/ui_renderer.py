@@ -9,34 +9,42 @@ import os
 import time
 import threading
 import logging
+from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
-from hardware.whisplay_board import WhisplayBoard
 from display.text_utils import (
     image_to_rgb565, wrap_text, draw_mixed_text, get_line_image, clear_line_cache,
     hex_to_rgb, luminance,
 )
 
+if TYPE_CHECKING:
+    from hardware.whisplay_board import WhisplayBoard
+
 log = logging.getLogger("display")
 
 # Default font search paths
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
-_FONT_CANDIDATES = [
-    os.path.join(_ASSETS_DIR, "NotoSansSC-Bold.ttf"),
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-]
+_REQUIRED_FONT_PATH = os.path.join(_ASSETS_DIR, "NotoSansSC-Bold.ttf")
+_WIFI_LEVEL_ICONS = {
+    1: "wifi-weak.png",
+    2: "wifi-medium.png",
+    3: "wifi-strong.png",
+}
+_STATUS_ICON_HEIGHT = 15
+_NETWORK_ICON_CENTER_SCALE = 1.4
+_HEADER_TOP_Y = 8
+_WIFI_EXTRA_UP_PX = 1
+_TITLE_OFFSET_Y = -5
+_EMOJI_OFFSET_Y = 10
+_STATUS_ICON_GROUP_DOWN_PX = 5
 
 
 def _find_font(custom_path: str = "") -> str:
     if custom_path and os.path.exists(custom_path):
         return custom_path
-    for p in _FONT_CANDIDATES:
-        if os.path.exists(p):
-            return p
+    if os.path.exists(_REQUIRED_FONT_PATH):
+        return _REQUIRED_FONT_PATH
     return ""
 
 
@@ -50,6 +58,7 @@ class DisplayState:
         self.text: str = ""
         self.battery_level: int = -1
         self.battery_color: tuple[int, int, int] = (128, 128, 128)
+        self.wifi_signal_level: int = 0
         self.scroll_top: float = 0.0
         self.scroll_speed: float = 0.25
         self._prev_text: str = ""
@@ -65,7 +74,10 @@ class DisplayState:
                 self._prev_text = new_text
                 self.text = new_text
 
-            for key in ("status", "emoji", "battery_level", "battery_color", "scroll_speed"):
+            for key in (
+                "status", "emoji", "battery_level", "battery_color",
+                "wifi_signal_level", "scroll_speed",
+            ):
                 if key in kwargs and kwargs[key] is not None:
                     setattr(self, key, kwargs[key])
 
@@ -77,6 +89,7 @@ class DisplayState:
                 "text": self.text,
                 "battery_level": self.battery_level,
                 "battery_color": self.battery_color,
+                "wifi_signal_level": self.wifi_signal_level,
                 "scroll_top": self.scroll_top,
                 "scroll_speed": self.scroll_speed,
             }
@@ -85,7 +98,7 @@ class DisplayState:
 class UIRenderer(threading.Thread):
     """Background thread that continuously renders the UI to the LCD."""
 
-    def __init__(self, board: WhisplayBoard, font_path: str = "", fps: int = 30):
+    def __init__(self, board: "WhisplayBoard", font_path: str = "", fps: int = 30):
         super().__init__(daemon=True)
         self.board = board
         self.fps = fps
@@ -94,14 +107,18 @@ class UIRenderer(threading.Thread):
 
         resolved = _find_font(font_path)
         if not resolved:
-            log.warning("No font found; text rendering will be limited")
-            resolved = ""
+            raise RuntimeError(
+                f"Required font not found: {_REQUIRED_FONT_PATH}. "
+                "Run install.sh to install NotoSansSC-Bold.ttf."
+            )
         self._font_path = resolved
         self._text_font = None
         self._status_font = None
         self._emoji_font = None
         self._battery_font = None
         self._line_height = 0
+        self._wifi_source_icon_cache: dict[str, Image.Image | None] = {}
+        self._wifi_scaled_icon_cache: dict[tuple[str, int, float], Image.Image | None] = {}
 
         if resolved:
             self._text_font = ImageFont.truetype(resolved, 20)
@@ -171,19 +188,51 @@ class UIRenderer(threading.Thread):
             return
 
         # Status text (top-left)
-        draw_mixed_text(image, snap["status"], self._status_font, (self.board.CornerHeight, 0))
+        draw_mixed_text(
+            image,
+            snap["status"],
+            self._status_font,
+            (self.board.CornerHeight, _HEADER_TOP_Y + _TITLE_OFFSET_Y),
+        )
 
         # Emoji (centered)
         emoji = snap["emoji"]
         if self._emoji_font:
             bbox = self._emoji_font.getbbox(emoji)
             ew = bbox[2] - bbox[0]
-            draw_mixed_text(image, emoji, self._emoji_font, ((width - ew) // 2, 28))
+            draw_mixed_text(image, emoji, self._emoji_font, ((width - ew) // 2, 28 + _EMOJI_OFFSET_Y))
 
         # Battery icon (top-right)
-        self._draw_battery(draw, snap, width)
+        self._draw_status_icons(draw, snap, width)
 
-    def _draw_battery(self, draw: ImageDraw.Draw, snap: dict, width: int):
+    def _draw_status_icons(self, draw: ImageDraw.Draw, snap: dict, width: int):
+        cursor_x = width - 15
+        icon_gap = 8
+
+        battery_w = self._measure_battery_icon(snap["battery_level"])
+        if battery_w > 0:
+            cursor_x -= battery_w
+            self._draw_battery(draw, snap, cursor_x, _HEADER_TOP_Y + _STATUS_ICON_GROUP_DOWN_PX)
+            cursor_x -= icon_gap
+
+        wifi_w = self._measure_wifi_icon(snap["wifi_signal_level"])
+        if wifi_w > 0:
+            cursor_x -= wifi_w
+            self._draw_wifi(
+                draw,
+                snap["wifi_signal_level"],
+                cursor_x,
+                _HEADER_TOP_Y + _STATUS_ICON_GROUP_DOWN_PX - _WIFI_EXTRA_UP_PX,
+            )
+
+    def _measure_battery_icon(self, level: int) -> int:
+        if level < 0:
+            return 0
+        bw = 26
+        head_w = 2
+        return bw + head_w
+
+    def _draw_battery(self, draw: ImageDraw.Draw, snap: dict, x: int, y: int):
         level = snap["battery_level"]
         if level < 0:
             return
@@ -194,8 +243,6 @@ class UIRenderer(threading.Thread):
         corner = 3
         lw = 2
         head_w, head_h = 2, 5
-        x = width - 10 - bw - head_w
-        y = 10
 
         # Outline
         draw.rounded_rectangle([x, y, x + bw, y + bh], radius=corner,
@@ -216,6 +263,58 @@ class UIRenderer(threading.Thread):
             ty = y + (bh - asc - desc) // 2
             fill = "black" if luminance(color) > 128 else "white"
             draw.text((tx, ty), txt, font=font, fill=fill)
+
+    def _measure_wifi_icon(self, level: int) -> int:
+        icon = self._get_wifi_icon(level)
+        if not icon:
+            return 0
+        return max(1, int(round(icon.width / _NETWORK_ICON_CENTER_SCALE)))
+
+    def _draw_wifi(self, draw: ImageDraw.Draw, level: int, x: int, y: int):
+        icon = self._get_wifi_icon(level)
+        if not icon:
+            return
+
+        base_w = self._measure_wifi_icon(level)
+        paste_x = x + (base_w - icon.width) // 2
+        paste_y = y + (_STATUS_ICON_HEIGHT - icon.height) // 2
+        draw._image.paste(icon, (paste_x, paste_y), icon)
+
+    def _get_wifi_icon(self, level: int) -> Image.Image | None:
+        try:
+            lvl = int(level)
+        except (TypeError, ValueError):
+            return None
+        if lvl < 1 or lvl > 3:
+            return None
+
+        icon_name = _WIFI_LEVEL_ICONS[lvl]
+        cache_key = (icon_name, _STATUS_ICON_HEIGHT, _NETWORK_ICON_CENTER_SCALE)
+        if cache_key in self._wifi_scaled_icon_cache:
+            return self._wifi_scaled_icon_cache[cache_key]
+
+        if icon_name in self._wifi_source_icon_cache:
+            src = self._wifi_source_icon_cache[icon_name]
+        else:
+            icon_path = os.path.join(_ASSETS_DIR, icon_name)
+            src = None
+            if os.path.exists(icon_path):
+                src = Image.open(icon_path).convert("RGBA")
+            self._wifi_source_icon_cache[icon_name] = src
+        if not src:
+            self._wifi_scaled_icon_cache[cache_key] = None
+            return None
+
+        src_w, src_h = src.size
+        if src_h <= 0:
+            self._wifi_scaled_icon_cache[cache_key] = None
+            return None
+
+        scaled_h = max(1, int(round(_STATUS_ICON_HEIGHT * _NETWORK_ICON_CENTER_SCALE)))
+        scaled_w = max(1, int(round(src_w * scaled_h / src_h)))
+        resized = src.resize((scaled_w, scaled_h), Image.LANCZOS)
+        self._wifi_scaled_icon_cache[cache_key] = resized
+        return resized
 
     def _draw_text_area(self, image: Image.Image, area_h: int, snap: dict):
         text = snap["text"]

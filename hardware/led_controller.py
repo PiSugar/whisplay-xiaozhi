@@ -2,7 +2,10 @@
 LED controller — maps application states to RGB LED colors.
 """
 
-from hardware.whisplay_board import WhisplayBoard
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hardware.whisplay_board import WhisplayBoard
 
 
 # State → (R, G, B)
@@ -19,7 +22,7 @@ STATE_COLORS = {
 
 
 class LedController:
-    def __init__(self, board: WhisplayBoard):
+    def __init__(self, board: "WhisplayBoard"):
         self._board = board
 
     def set_state(self, state: str):

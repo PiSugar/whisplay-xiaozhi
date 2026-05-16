@@ -23,6 +23,16 @@ echo "Home:       $USER_HOME"
 echo "Project:    $SCRIPT_DIR"
 echo "========================================"
 
+if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet whisplay-daemon.service || [ -S /tmp/whisplay-daemon.sock ]; then
+        echo "Detected running whisplay-daemon."
+        echo "Please launch xiaozhi from the daemon app list instead of installing the standalone systemd service."
+        echo "If you really want standalone mode, stop the daemon first:"
+        echo "  sudo systemctl stop whisplay-daemon.service"
+        exit 1
+    fi
+fi
+
 # Optional: disable graphical interface for headless setup
 if [ "$(systemctl get-default)" == "graphical.target" ]; then
     echo "Graphical interface is currently enabled."

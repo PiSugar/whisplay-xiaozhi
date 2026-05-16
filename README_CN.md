@@ -13,9 +13,10 @@
 - **WebSocket 语音对话** — 实现小智协议 v1，Opus 音频编解码
 - **自动配对** — 设备在 LCD 上显示验证码，在 xiaozhi.me 输入即可绑定（无需手动填写 Token）
 - **按键唤醒** — 按下按键唤醒设备并开始自动聆听（服务端 VAD 控制语音结束）
-- **LCD 显示** — 240×280 ST7789V，显示状态、表情、滚动文字、电量
+- **LCD 显示** — 240×280 ST7789V，显示状态、表情、滚动文字、Wi-Fi 信号和电量
 - **RGB LED** — 根据状态自动变色（空闲/聆听/思考/回答/错误）
 - **电池监测** — PiSugar 电池电量实时显示
+- **兼容 whisplay-daemon** — 检测到 daemon 时自动切换到 daemon 提供的 framebuffer / 按键 / LED
 - **唤醒词** — 支持 openwakeword 免摆键唤醒
 - **MCP 支持** — 服务端工具调用（JSON-RPC 2.0）
 
@@ -47,6 +48,8 @@ cp .env.template .env
 ```
 
 大部分配置开箱即用。设备会自动检测 MAC 地址并与服务器配对。
+
+如果系统提供了 `whisplay-daemon`，请将本项目注册为 daemon 应用入口（`app_id: whisplay-xiaozhi`），并从 daemon 的应用管理中启动。
 
 ### 3. 运行
 
@@ -132,6 +135,8 @@ sudo systemctl start whisplay-xiaozhi@pi
 # 查看日志
 sudo journalctl -u whisplay-xiaozhi@pi -f
 ```
+
+如果系统里已经在运行 `whisplay-daemon`，请直接从 daemon 注册的 `whisplay-xiaozhi` 应用入口启动，而不是再通过 `startup.sh` 安装独立服务。
 
 ## 协议参考
 

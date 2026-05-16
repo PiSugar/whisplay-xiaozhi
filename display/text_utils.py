@@ -98,8 +98,19 @@ def get_line_image(text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
         return _line_image_cache[key]
 
     ascent, descent = font.getmetrics()
-    baseline = ascent
-    line_height = ascent + descent
+    text_line_height = ascent + descent
+    emoji_heights = []
+    for c in text:
+        if _is_emoji(c):
+            img = get_emoji_image(c, size=font.size)
+            if img:
+                emoji_heights.append(img.height)
+    max_emoji_h = max(emoji_heights) if emoji_heights else 0
+
+    # Keep a shared baseline but ensure the line canvas is tall enough so emoji
+    # does not render at negative Y and get clipped.
+    baseline = max(ascent, max_emoji_h)
+    line_height = max(text_line_height, baseline + descent)
 
     width = sum(get_char_size(font, c)[0] for c in text)
     img = Image.new("RGBA", (max(1, width), line_height), (0, 0, 0, 0))
@@ -113,7 +124,7 @@ def get_line_image(text: str, font: ImageFont.FreeTypeFont) -> Image.Image:
                 img.paste(emoji_img, (x, baseline - emoji_img.height), emoji_img)
                 x += emoji_img.width
         else:
-            draw.text((x, 0), char, font=font, fill=(255, 255, 255))
+            draw.text((x, baseline - ascent), char, font=font, fill=(255, 255, 255))
             x += get_char_size(font, char)[0]
 
     _line_image_cache[key] = img
