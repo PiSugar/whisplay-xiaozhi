@@ -22,6 +22,7 @@ class AudioRecorder:
 
     def start(self):
         """Start the sox recording subprocess."""
+        self.stop()
         cmd = [
             "sox",
             "-t", "alsa", config.ALSA_INPUT_DEVICE,
@@ -52,11 +53,12 @@ class AudioRecorder:
         """Async generator that yields PCM frames of exactly frame_bytes size."""
         if not self._process or not self._process.stdout:
             return
+        process = self._process
         loop = asyncio.get_event_loop()
-        while self._process and self._process.poll() is None:
+        while process.poll() is None:
             try:
                 data = await loop.run_in_executor(
-                    None, self._process.stdout.read, frame_bytes
+                    None, process.stdout.read, frame_bytes
                 )
             except Exception:
                 break

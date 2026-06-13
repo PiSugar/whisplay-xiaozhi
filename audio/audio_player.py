@@ -24,6 +24,18 @@ class AudioPlayer:
 
     def start(self):
         """Start sox playback subprocess and writer task."""
+        if self._process:
+            try:
+                if self._process.stdin:
+                    self._process.stdin.close()
+                self._process.terminate()
+                self._process.wait(timeout=2)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+            self._process = None
         # Clean up any previous writer task
         if self._task and not self._task.done():
             self._task.cancel()
