@@ -11,24 +11,30 @@ from iot.thing import Thing, Parameter, ValueType
 
 log = logging.getLogger("iot.speaker")
 
-# Preferred simple-control names for WM8960 codec
-_CONTROL_NAMES = ["Speaker", "Master", "Playback", "PCM"]
+# Preferred controls: unified Whisplay first, legacy codec controls as fallback.
+_CONTROL_NAMES = ["speaker", "Speaker", "Master", "Playback", "PCM"]
 
 
 def _find_card() -> str:
-    """Dynamically detect the ALSA card index for the WM8960 codec.
+    """Dynamically detect the Whisplay ALSA card.
 
-    Reads /proc/asound/cards and looks for a line containing 'wm8960'.
-    Returns the card index as a string, or empty string to use the default card.
+    Returns the unified card name when available; otherwise returns a legacy
+    card index, or an empty string to use the default card.
     """
     try:
         with open("/proc/asound/cards", "r") as f:
+            fallback_index = ""
             for line in f:
-                if "wm8960" in line.lower():
-                    # Line format: " 1 [wm8960soundcard]: simple-card - ..."
-                    m = re.match(r"\s*(\d+)\s+\[", line)
-                    if m:
-                        return m.group(1)
+                lower = line.lower()
+                m = re.match(r"\s*(\d+)\s+\[([^\]]+)\]", line)
+                if not m:
+                    continue
+                card_index, card_name = m.group(1), m.group(2).strip()
+                if "whisplaysound" in lower:
+                    return card_name
+                if not fallback_index and ("wm8960" in lower or "es8389" in lower):
+                    fallback_index = card_index
+            return fallback_index
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -37,8 +43,18 @@ def _find_card() -> str:
 
 
 def _find_control(card: str) -> str:
-    """Find the first working amixer simple control on the given card."""
+    """Find the first working amixer control on the given card."""
     card_args = ["-c", card] if card else []
+    try:
+        r = subprocess.run(
+            ["amixer"] + card_args + ["controls"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0 and "name='speaker'" in r.stdout:
+            return "name=speaker"
+    except Exception:
+        pass
+
     for name in _CONTROL_NAMES:
         try:
             r = subprocess.run(
@@ -96,11 +112,15 @@ class Speaker(Thing):
 
     def _read_volume(self) -> int:
         try:
+            command = self._amixer_cmd("cget", self._control) if self._control.startswith("name=") else self._amixer_cmd("sget", self._control)
             r = subprocess.run(
-                self._amixer_cmd("sget", self._control),
+                command,
                 capture_output=True, text=True, timeout=5,
             )
             if r.returncode == 0:
+                m = re.search(r":\s*values=(\d+)", r.stdout)
+                if m:
+                    return int(m.group(1))
                 m = re.search(r"\[(\d+)%\]", r.stdout)
                 if m:
                     return int(m.group(1))
@@ -110,8 +130,9 @@ class Speaker(Thing):
 
     def _write_volume(self, level: int):
         try:
+            command = self._amixer_cmd("cset", self._control, str(level)) if self._control.startswith("name=") else self._amixer_cmd("sset", self._control, f"{level}%")
             subprocess.run(
-                self._amixer_cmd("sset", self._control, f"{level}%"),
+                command,
                 capture_output=True, timeout=5,
             )
         except Exception as e:
