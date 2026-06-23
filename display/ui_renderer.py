@@ -6,6 +6,7 @@ Adapted from whisplay-chatbot python/chatbot-ui.py (RenderThread).
 """
 
 import os
+import re
 import time
 import threading
 import logging
@@ -38,6 +39,14 @@ _WIFI_EXTRA_UP_PX = 1
 _TITLE_OFFSET_Y = -5
 _EMOJI_OFFSET_Y = 10
 _STATUS_ICON_GROUP_DOWN_PX = 5
+_TOOL_TAG_RE = re.compile(
+    r"[%％﹪]\s*([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*)",
+    re.IGNORECASE,
+)
+_TOOL_TAG_BG = (8, 42, 112)
+_TOOL_TAG_FG = (255, 255, 255)
+_TOOL_TAG_COUNT_FG = (122, 205, 255)
+_TOOL_TAG_MARGIN_Y = 2
 
 
 def _find_font(custom_path: str = "") -> str:
@@ -116,6 +125,7 @@ class UIRenderer(threading.Thread):
         self._status_font = None
         self._emoji_font = None
         self._battery_font = None
+        self._tool_tag_font = None
         self._line_height = 0
         self._wifi_source_icon_cache: dict[str, Image.Image | None] = {}
         self._wifi_scaled_icon_cache: dict[tuple[str, int, float], Image.Image | None] = {}
@@ -125,6 +135,7 @@ class UIRenderer(threading.Thread):
             self._status_font = ImageFont.truetype(resolved, 20)
             self._emoji_font = ImageFont.truetype(resolved, 40)
             self._battery_font = ImageFont.truetype(resolved, 13)
+            self._tool_tag_font = ImageFont.truetype(resolved, 17)
             asc, desc = self._text_font.getmetrics()
             self._line_height = asc + desc
 
@@ -324,23 +335,184 @@ class UIRenderer(threading.Thread):
         font = self._text_font
         lh = self._line_height
         W = self.board.LCD_WIDTH
-        lines = wrap_text(text, font, W - 20)
-        max_scroll = max(0, (len(lines) + 1) * lh - area_h)
+        lines = self._build_text_lines(text, font, W - 20)
+        content_h = sum(self._line_item_height(line, lh) for line in lines) + lh
+        max_scroll = max(0, content_h - area_h)
 
         scroll_top = snap["scroll_top"]
         speed = snap["scroll_speed"]
 
         # Render visible lines
         y = 0
-        for i, line in enumerate(lines):
-            line_top = i * lh
-            line_bot = line_top + lh
+        line_top = 0
+        for line in lines:
+            item_h = self._line_item_height(line, lh)
+            line_bot = line_top + item_h
             if line_bot >= scroll_top and line_top - scroll_top <= area_h:
-                draw_mixed_text(image, line, font, (10, int(line_top - scroll_top)))
-            y = line_bot
+                y = int(line_top - scroll_top)
+                if isinstance(line, dict) and line.get("type") == "tool_tag":
+                    self._draw_tool_tag(
+                        image,
+                        line["label"],
+                        int(line.get("count", 1)),
+                        font,
+                        10,
+                        y,
+                        W - 20,
+                        item_h,
+                    )
+                else:
+                    draw_mixed_text(image, str(line), font, (10, y))
+            line_top = line_bot
 
         # Advance scroll
         if speed > 0 and scroll_top < max_scroll:
             new_top = min(scroll_top + speed, max_scroll)
             with self.state.lock:
                 self.state.scroll_top = new_top
+
+    def _build_text_lines(self, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list:
+        lines = []
+        pending_tool_name = ""
+        pending_tool_count = 0
+
+        def flush_tool_tag():
+            nonlocal pending_tool_name, pending_tool_count
+            if not pending_tool_name or pending_tool_count <= 0:
+                return
+            lines.append({"type": "tool_tag", "label": pending_tool_name, "count": pending_tool_count})
+            pending_tool_name = ""
+            pending_tool_count = 0
+
+        def append_tool_tag(name: str):
+            nonlocal pending_tool_name, pending_tool_count
+            if pending_tool_name and pending_tool_name != name:
+                flush_tool_tag()
+            pending_tool_name = name
+            pending_tool_count += 1
+
+        def append_text(value: str):
+            parts = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            for i, raw_line in enumerate(parts):
+                if raw_line:
+                    lines.extend(wrap_text(raw_line, font, max_width))
+                elif lines and 0 < i < len(parts) - 1:
+                    lines.append("")
+
+        def consume_tail_after_marker(value: str, tool_name: str = "") -> tuple[str, int]:
+            tail = value.lstrip(" \t:-—,，.。…")
+            if not tail:
+                return "", 0
+
+            def is_tool_arg_token(token: str) -> bool:
+                if re.fullmatch(r"[A-Za-z0-9_./:=+-]+", token):
+                    return True
+                if len(token) <= 8 and not re.search(r"[。！？；，,.!?;]", token):
+                    return True
+                return False
+
+            extra_count = 0
+            consumed_current_arg = False
+            while tail:
+                parts = tail.split(None, 1)
+                first = parts[0]
+                rest = parts[1].lstrip(" \t:-—,，.。…") if len(parts) > 1 else ""
+
+                if tool_name and first.lower() == tool_name.lower():
+                    extra_count += 1
+                    tail = rest
+                    parts = tail.split(None, 1)
+                    if parts and is_tool_arg_token(parts[0]):
+                        tail = parts[1].lstrip(" \t:-—,，.。…") if len(parts) > 1 else ""
+                    continue
+
+                if not consumed_current_arg and is_tool_arg_token(first):
+                    consumed_current_arg = True
+                    tail = rest
+                    continue
+
+                return tail, extra_count
+
+            return "", extra_count
+
+        for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            matches = list(_TOOL_TAG_RE.finditer(raw_line))
+            if not matches:
+                flush_tool_tag()
+                append_text(raw_line)
+                continue
+
+            before = raw_line[:matches[0].start()]
+            if before.strip():
+                flush_tool_tag()
+                append_text(before)
+
+            cursor = matches[0].start()
+            for match in matches:
+                between = raw_line[cursor:match.start()]
+                visible_between, extra_count = consume_tail_after_marker(
+                    between,
+                    pending_tool_name if pending_tool_name else "",
+                )
+                for _ in range(extra_count):
+                    append_tool_tag(pending_tool_name)
+                if visible_between.strip():
+                    flush_tool_tag()
+                    append_text(visible_between)
+                append_tool_tag(match.group(1))
+                cursor = match.end()
+
+            tail, extra_count = consume_tail_after_marker(raw_line[cursor:], pending_tool_name)
+            for _ in range(extra_count):
+                append_tool_tag(pending_tool_name)
+            if tail.strip():
+                flush_tool_tag()
+                append_text(tail)
+
+        flush_tool_tag()
+        return lines
+
+    def _line_item_height(self, line, line_height: int) -> int:
+        if isinstance(line, dict) and line.get("type") == "tool_tag":
+            return line_height + _TOOL_TAG_MARGIN_Y * 2
+        return line_height
+
+    def _draw_tool_tag(
+        self,
+        image: Image.Image,
+        label: str,
+        count: int,
+        font: ImageFont.FreeTypeFont,
+        x: int,
+        y: int,
+        max_width: int,
+        line_height: int,
+    ):
+        draw = ImageDraw.Draw(image)
+        tag_font = self._tool_tag_font or font
+        bbox = tag_font.getbbox(label)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        count_text = str(count) if count > 1 else ""
+        count_bbox = tag_font.getbbox(count_text) if count_text else (0, 0, 0, 0)
+        count_w = count_bbox[2] - count_bbox[0]
+        count_h = count_bbox[3] - count_bbox[1]
+        count_gap = 7 if count_text else 0
+        pad_x = 10
+        tag_w = min(max_width, text_w + count_gap + count_w + pad_x * 2)
+        inner_h = max(1, line_height - _TOOL_TAG_MARGIN_Y * 2)
+        tag_h = min(max(12, inner_h - 2), 22)
+        tag_y = y + _TOOL_TAG_MARGIN_Y + max(0, (inner_h - tag_h) // 2)
+        draw.rounded_rectangle(
+            [x, tag_y, x + tag_w, tag_y + tag_h],
+            radius=6,
+            fill=_TOOL_TAG_BG,
+        )
+        content_w = text_w + count_gap + count_w
+        text_x = x + (tag_w - content_w) // 2
+        text_y = tag_y + (tag_h - text_h) // 2 - bbox[1]
+        draw.text((text_x, text_y), label, font=tag_font, fill=_TOOL_TAG_FG)
+        if count_text:
+            count_x = text_x + text_w + count_gap
+            count_y = tag_y + (tag_h - count_h) // 2 - count_bbox[1]
+            draw.text((count_x, count_y), count_text, font=tag_font, fill=_TOOL_TAG_COUNT_FG)
