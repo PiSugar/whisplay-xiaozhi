@@ -123,6 +123,19 @@ whisplay-xiaozhi/
 | `WAKE_WORDS` | Wake words (comma-separated) | `hey_jarvis` |
 | `LCD_BRIGHTNESS` | LCD brightness (0-100) | `100` |
 | `PISUGAR_ENABLED` | Enable battery monitor | `true` |
+| `XIAOZHI_LOCAL_COMMAND_TOOL_ENABLED` | Expose the `local_command` MCP tool | `true` |
+| `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` | Comma-separated executable names allowed by `local_command` | `date,uptime,hostname,whoami,df,free,ip,iwgetid,vcgencmd` |
+| `XIAOZHI_LOCAL_COMMAND_UNSAFE` | Allow any local executable; use only on trusted devices | `false` |
+| `XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC` | Max seconds per local command | `5` |
+| `XIAOZHI_LOCAL_COMMAND_OUTPUT_LIMIT` | Max stdout/stderr characters returned | `4000` |
+
+## MCP Local Command Tool
+
+When MCP is enabled by the XiaoZhi gateway, the device advertises a `local_command`
+tool. It accepts a `command` string and optional `timeout`, runs the command
+locally without a shell, and returns `stdout`, `stderr`, and `exit_code`.
+By default only the executables in `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` can run.
+Set `XIAOZHI_LOCAL_COMMAND_UNSAFE=true` only for fully trusted deployments.
 
 ## Auto-Start on Boot
 

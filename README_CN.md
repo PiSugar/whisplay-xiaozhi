@@ -123,6 +123,19 @@ whisplay-xiaozhi/
 | `WAKE_WORDS` | 唤醒词列表（逗号分隔） | `hey_jarvis` |
 | `LCD_BRIGHTNESS` | LCD 亮度 (0-100) | `100` |
 | `PISUGAR_ENABLED` | 启用电池监测 | `true` |
+| `XIAOZHI_LOCAL_COMMAND_TOOL_ENABLED` | 向小智暴露 `local_command` MCP 工具 | `true` |
+| `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` | `local_command` 允许执行的命令名，逗号分隔 | `date,uptime,hostname,whoami,df,free,ip,iwgetid,vcgencmd` |
+| `XIAOZHI_LOCAL_COMMAND_UNSAFE` | 允许执行任意本地程序；仅可信设备/网络使用 | `false` |
+| `XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC` | 单次本地命令最长执行秒数 | `5` |
+| `XIAOZHI_LOCAL_COMMAND_OUTPUT_LIMIT` | 返回 stdout/stderr 的最大字符数 | `4000` |
+
+## MCP 本地命令工具
+
+当小智网关启用 MCP 时，设备会注册 `local_command` 工具。工具接收
+`command` 字符串和可选的 `timeout`，不经过 shell 直接在本机执行命令，
+并返回 `stdout`、`stderr` 和 `exit_code`。默认只允许执行
+`XIAOZHI_LOCAL_COMMAND_ALLOWLIST` 中列出的命令名。如需开放任意命令，
+可设置 `XIAOZHI_LOCAL_COMMAND_UNSAFE=true`，但只应在完全可信的设备和网络中使用。
 
 ## 开机自启
 

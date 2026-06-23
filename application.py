@@ -33,6 +33,12 @@ from audio.audio_player import AudioPlayer
 from protocol.websocket_client import XiaoZhiClient
 from protocol.mqtt_client import XiaoZhiMqttClient
 from protocol.mcp_handler import McpHandler
+from protocol.local_command_tool import (
+    DESCRIPTION as LOCAL_COMMAND_DESCRIPTION,
+    INPUT_SCHEMA as LOCAL_COMMAND_INPUT_SCHEMA,
+    is_enabled as local_command_is_enabled,
+    run_local_command,
+)
 from protocol.ota_client import OtaClient
 from iot.thing_manager import ThingManager
 from iot.things.speaker import Speaker
@@ -78,6 +84,13 @@ class Application:
         )
         self.client = None  # Set in _activate_and_connect (WebSocket or MQTT)
         self.mcp = McpHandler()
+        if local_command_is_enabled():
+            self.mcp.register(
+                "local_command",
+                run_local_command,
+                description=LOCAL_COMMAND_DESCRIPTION,
+                input_schema=LOCAL_COMMAND_INPUT_SCHEMA,
+            )
 
         # State
         self._state = self.IDLE

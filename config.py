@@ -29,6 +29,10 @@ def _float(key: str, default: str = "0.0") -> float:
         return float(default)
 
 
+def _csv(key: str, default: str = "") -> str:
+    return ",".join(item.strip() for item in _get(key, default).split(",") if item.strip())
+
+
 # XiaoZhi server
 OTA_URL = _get("XIAOZHI_OTA_URL", "https://api.tenclass.net/xiaozhi/ota/")
 DEVICE_ID = _get("XIAOZHI_DEVICE_ID")
@@ -60,3 +64,13 @@ PISUGAR_ENABLED = _bool("PISUGAR_ENABLED", "true")
 PISUGAR_HOST = _get("PISUGAR_HOST", "127.0.0.1")
 PISUGAR_PORT = _int("PISUGAR_PORT", "8423")
 BATTERY_POLL_INTERVAL = _int("BATTERY_POLL_INTERVAL", "5")
+
+# MCP local command tool
+LOCAL_COMMAND_TOOL_ENABLED = _bool("XIAOZHI_LOCAL_COMMAND_TOOL_ENABLED", "true")
+LOCAL_COMMAND_ALLOWLIST = _csv(
+    "XIAOZHI_LOCAL_COMMAND_ALLOWLIST",
+    "date,uptime,hostname,whoami,df,free,ip,iwgetid,vcgencmd",
+)
+LOCAL_COMMAND_UNSAFE = _bool("XIAOZHI_LOCAL_COMMAND_UNSAFE", "false")
+LOCAL_COMMAND_TIMEOUT_SEC = _float("XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC", "5")
+LOCAL_COMMAND_OUTPUT_LIMIT = _int("XIAOZHI_LOCAL_COMMAND_OUTPUT_LIMIT", "4000")

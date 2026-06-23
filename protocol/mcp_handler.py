@@ -7,30 +7,52 @@ callable tools that can be invoked by the LLM.
 """
 
 import logging
-from typing import Any, Callable
+import inspect
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
 
 import config
 
 log = logging.getLogger("mcp")
 
 # Tool function: (params: dict) -> dict
-ToolFunc = Callable[[dict], Any]
+ToolFunc = Callable[[dict], Any | Awaitable[Any]]
+
+
+@dataclass
+class Tool:
+    func: ToolFunc
+    description: str = ""
+    input_schema: dict = field(default_factory=lambda: {"type": "object", "properties": {}})
 
 
 class McpHandler:
     """Registry and dispatcher for MCP tool calls."""
 
     def __init__(self):
-        self._tools: dict[str, ToolFunc] = {}
+        self._tools: dict[str, Tool] = {}
 
-    def register(self, name: str, func: ToolFunc, description: str = ""):
+    def register(
+        self,
+        name: str,
+        func: ToolFunc,
+        description: str = "",
+        input_schema: dict | None = None,
+    ):
         """Register a tool that the server can invoke."""
-        self._tools[name] = func
+        self._tools[name] = Tool(
+            func=func,
+            description=description,
+            input_schema=input_schema or {"type": "object", "properties": {}},
+        )
         log.info("registered MCP tool: %s", name)
 
     def get_descriptors(self) -> list[dict]:
         """Return tool descriptors for IoT/MCP registration with server."""
-        return [{"name": name} for name in self._tools]
+        return [
+            {"name": name, "description": tool.description, "inputSchema": tool.input_schema}
+            for name, tool in self._tools.items()
+        ]
 
     async def handle(self, payload: dict) -> tuple[str, dict] | None:
         """Process an incoming MCP message. Returns (id, result) or None."""
@@ -56,8 +78,8 @@ class McpHandler:
         if method == "tools/list":
             log.info("MCP tools/list request (id=%s)", rpc_id)
             tools = [
-                {"name": name, "description": "", "inputSchema": {"type": "object", "properties": {}}}
-                for name in self._tools
+                {"name": name, "description": tool.description, "inputSchema": tool.input_schema}
+                for name, tool in self._tools.items()
             ]
             return rpc_id, {"tools": tools}
 
@@ -65,13 +87,15 @@ class McpHandler:
         tool_name = params.get("name", method)
         arguments = params.get("arguments", {})
 
-        func = self._tools.get(tool_name)
-        if not func:
+        tool = self._tools.get(tool_name)
+        if not tool:
             log.warning("unknown MCP tool: %s", tool_name)
             return rpc_id, {"error": f"Unknown tool: {tool_name}"}
 
         try:
-            result = func(arguments)
+            result = tool.func(arguments)
+            if inspect.isawaitable(result):
+                result = await result
             log.info("MCP tool %s executed", tool_name)
             return rpc_id, {"content": [{"type": "text", "text": str(result)}]}
         except Exception as e:
