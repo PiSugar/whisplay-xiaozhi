@@ -122,20 +122,40 @@ whisplay-xiaozhi/
 | `WAKE_WORD_ENABLED` | 启用唤醒词 | `false` |
 | `WAKE_WORDS` | 唤醒词列表（逗号分隔） | `hey_jarvis` |
 | `LCD_BRIGHTNESS` | LCD 亮度 (0-100) | `100` |
+| `DISPLAY_SCROLL_SPEED` | 文字每帧滚动像素数 | `1.0` |
 | `PISUGAR_ENABLED` | 启用电池监测 | `true` |
 | `XIAOZHI_LOCAL_COMMAND_TOOL_ENABLED` | 向小智暴露 `local_command` MCP 工具 | `true` |
 | `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` | `local_command` 允许执行的命令名，逗号分隔 | `date,uptime,hostname,whoami,df,free,ip,iwgetid,vcgencmd` |
 | `XIAOZHI_LOCAL_COMMAND_UNSAFE` | 允许执行任意本地程序；仅可信设备/网络使用 | `false` |
+| `XIAOZHI_LOCAL_COMMAND_USE_SHELL` | 为 `local_command` 启用 shell 语法；需要同时启用 unsafe | `false` |
 | `XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC` | 单次本地命令最长执行秒数 | `5` |
 | `XIAOZHI_LOCAL_COMMAND_OUTPUT_LIMIT` | 返回 stdout/stderr 的最大字符数 | `4000` |
+| `XIAOZHI_WEB_TOOLS_ENABLED` | 向小智暴露 `fetch_webpage` 和 `web_search` MCP 工具 | `true` |
+| `XIAOZHI_WEB_TOOL_PROXY` | 网页工具使用的可选代理；为空时回退到 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` | — |
+| `XIAOZHI_WEB_TOOL_TIMEOUT_SEC` | 网页工具 HTTP 请求超时秒数 | `15` |
+| `XIAOZHI_WEB_TOOL_TEXT_LIMIT` | 返回网页正文的最大字符数 | `6000` |
+| `XIAOZHI_WEB_TOOL_LINK_LIMIT` | 单个网页返回链接数量上限 | `30` |
+| `XIAOZHI_WEB_SEARCH_RESULT_LIMIT` | 单次网页搜索返回结果上限 | `5` |
+| `XIAOZHI_GOOGLE_SEARCH_API_KEY` | `search_type=sites` 使用的 Google Programmable Search JSON API key | — |
+| `XIAOZHI_GOOGLE_SEARCH_ENGINE_ID` | `search_type=sites` 使用的 Google Programmable Search Engine ID (`cx`) | — |
 
-## MCP 本地命令工具
+## MCP 工具
 
 当小智网关启用 MCP 时，设备会注册 `local_command` 工具。工具接收
 `command` 字符串和可选的 `timeout`，不经过 shell 直接在本机执行命令，
 并返回 `stdout`、`stderr` 和 `exit_code`。默认只允许执行
 `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` 中列出的命令名。如需开放任意命令，
 可设置 `XIAOZHI_LOCAL_COMMAND_UNSAFE=true`，但只应在完全可信的设备和网络中使用。
+如果需要管道、重定向、`&&` 或 sudo 密码管道等 shell 功能，还需要设置
+`XIAOZHI_LOCAL_COMMAND_USE_SHELL=true`。
+
+当 `XIAOZHI_WEB_TOOLS_ENABLED=true` 时，设备还会注册：
+
+- `fetch_webpage`：获取 HTTP(S) 网页，返回页面标题、可读正文和链接列表；也可以通过 `link_text` 或 `link_index` 继续打开当前页或上一页里的链接。
+- `web_search`：搜索网页并返回简洁的标题和 URL 列表。`search_type=web` 使用 DuckDuckGo HTML，`search_type=news` 使用 Google News RSS，`search_type=sites` 在配置后使用 Google Programmable Search JSON API。
+
+设置 `XIAOZHI_WEB_TOOL_PROXY` 可以让这些网页请求走代理；留空时会自动使用
+已有的标准代理环境变量。
 
 ## 开机自启
 

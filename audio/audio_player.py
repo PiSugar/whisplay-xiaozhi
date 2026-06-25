@@ -21,6 +21,7 @@ class AudioPlayer:
         self._process: subprocess.Popen | None = None
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._task: asyncio.Task | None = None
+        self._stopping = False
 
     def start(self):
         """Start sox playback subprocess and writer task."""
@@ -42,6 +43,7 @@ class AudioPlayer:
             self._task = None
         # Drain leftover queue
         self._queue = asyncio.Queue()
+        self._stopping = False
         cmd = [
             "sox",
             "-t", "raw",
@@ -72,33 +74,59 @@ class AudioPlayer:
                     await loop.run_in_executor(None, self._process.stdin.flush)
                 except Exception:
                     break
+        if self._process and self._process.stdin:
+            try:
+                await loop.run_in_executor(None, self._process.stdin.close)
+            except Exception:
+                pass
 
     async def put(self, pcm_data: bytes):
         """Enqueue decoded PCM data for playback."""
+        if self._stopping:
+            return
         await self._queue.put(pcm_data)
 
     async def stop(self):
-        """Stop playback, close sox process."""
-        # Signal writer to exit
+        """Drain queued audio and stop playback."""
+        self._stopping = True
+        tail_padding = self._tail_padding()
+        if tail_padding:
+            await self._queue.put(tail_padding)
         await self._queue.put(None)
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=3)
             except asyncio.TimeoutError:
                 self._task.cancel()
+            self._task = None
         if self._process:
             try:
-                if self._process.stdin:
-                    self._process.stdin.close()
-                self._process.terminate()
-                self._process.wait(timeout=2)
+                loop = asyncio.get_event_loop()
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, self._process.wait),
+                    timeout=config.AUDIO_OUTPUT_DRAIN_TIMEOUT_SEC,
+                )
             except Exception:
                 try:
-                    self._process.kill()
+                    self._process.terminate()
+                    self._process.wait(timeout=1)
                 except Exception:
-                    pass
+                    try:
+                        self._process.kill()
+                    except Exception:
+                        pass
             self._process = None
         log.info("player stopped")
+
+    def _tail_padding(self) -> bytes:
+        """Return a short silence pad so ALSA/sox drains audible speech tails."""
+        ms = max(0, config.AUDIO_OUTPUT_TAIL_PADDING_MS)
+        if ms <= 0:
+            return b""
+        sample_width = 2
+        channels = 1
+        frames = config.AUDIO_OUTPUT_SAMPLE_RATE * ms // 1000
+        return b"\x00" * frames * sample_width * channels
 
     def is_active(self) -> bool:
         return self._process is not None and self._process.poll() is None

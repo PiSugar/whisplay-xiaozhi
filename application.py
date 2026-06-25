@@ -39,6 +39,15 @@ from protocol.local_command_tool import (
     is_enabled as local_command_is_enabled,
     run_local_command,
 )
+from protocol.web_tools import (
+    FETCH_WEBPAGE_DESCRIPTION,
+    FETCH_WEBPAGE_INPUT_SCHEMA,
+    WEB_SEARCH_DESCRIPTION,
+    WEB_SEARCH_INPUT_SCHEMA,
+    fetch_webpage,
+    is_enabled as web_tools_is_enabled,
+    web_search,
+)
 from protocol.ota_client import OtaClient
 from iot.thing_manager import ThingManager
 from iot.things.speaker import Speaker
@@ -90,6 +99,19 @@ class Application:
                 run_local_command,
                 description=LOCAL_COMMAND_DESCRIPTION,
                 input_schema=LOCAL_COMMAND_INPUT_SCHEMA,
+            )
+        if web_tools_is_enabled():
+            self.mcp.register(
+                "fetch_webpage",
+                fetch_webpage,
+                description=FETCH_WEBPAGE_DESCRIPTION,
+                input_schema=FETCH_WEBPAGE_INPUT_SCHEMA,
+            )
+            self.mcp.register(
+                "web_search",
+                web_search,
+                description=WEB_SEARCH_DESCRIPTION,
+                input_schema=WEB_SEARCH_INPUT_SCHEMA,
             )
 
         # State

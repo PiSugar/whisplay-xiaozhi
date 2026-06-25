@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from PIL import Image, ImageDraw, ImageFont
 
+import config
 from display.text_utils import (
     image_to_rgb565, wrap_text, draw_mixed_text, get_line_image, clear_line_cache,
     hex_to_rgb, luminance,
@@ -69,7 +70,7 @@ class DisplayState:
         self.battery_color: tuple[int, int, int] = (128, 128, 128)
         self.wifi_signal_level: int = 0
         self.scroll_top: float = 0.0
-        self.scroll_speed: float = 0.25
+        self.scroll_speed: float = max(0.0, config.DISPLAY_SCROLL_SPEED)
         self._prev_text: str = ""
 
     def update(self, **kwargs):
@@ -404,9 +405,11 @@ class UIRenderer(threading.Thread):
             if not tail:
                 return "", 0
 
-            def is_tool_arg_token(token: str) -> bool:
+            def is_tool_arg_token(token: str, current_tool: str = "") -> bool:
                 if re.fullmatch(r"[A-Za-z0-9_./:=+-]+", token):
                     return True
+                if current_tool.lower() == "local_command":
+                    return False
                 if len(token) <= 8 and not re.search(r"[。！？；，,.!?;]", token):
                     return True
                 return False
@@ -422,11 +425,11 @@ class UIRenderer(threading.Thread):
                     extra_count += 1
                     tail = rest
                     parts = tail.split(None, 1)
-                    if parts and is_tool_arg_token(parts[0]):
+                    if parts and is_tool_arg_token(parts[0], tool_name):
                         tail = parts[1].lstrip(" \t:-—,，.。…") if len(parts) > 1 else ""
                     continue
 
-                if not consumed_current_arg and is_tool_arg_token(first):
+                if not consumed_current_arg and is_tool_arg_token(first, tool_name):
                     consumed_current_arg = True
                     tail = rest
                     continue
@@ -493,7 +496,7 @@ class UIRenderer(threading.Thread):
         bbox = tag_font.getbbox(label)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
-        count_text = str(count) if count > 1 else ""
+        count_text = f"x{count}" if count > 1 else ""
         count_bbox = tag_font.getbbox(count_text) if count_text else (0, 0, 0, 0)
         count_w = count_bbox[2] - count_bbox[0]
         count_h = count_bbox[3] - count_bbox[1]
@@ -514,5 +517,4 @@ class UIRenderer(threading.Thread):
         draw.text((text_x, text_y), label, font=tag_font, fill=_TOOL_TAG_FG)
         if count_text:
             count_x = text_x + text_w + count_gap
-            count_y = tag_y + (tag_h - count_h) // 2 - count_bbox[1]
-            draw.text((count_x, count_y), count_text, font=tag_font, fill=_TOOL_TAG_COUNT_FG)
+            draw.text((count_x, text_y), count_text, font=tag_font, fill=_TOOL_TAG_COUNT_FG)

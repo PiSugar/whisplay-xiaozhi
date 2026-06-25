@@ -122,20 +122,40 @@ whisplay-xiaozhi/
 | `WAKE_WORD_ENABLED` | Enable wake word | `false` |
 | `WAKE_WORDS` | Wake words (comma-separated) | `hey_jarvis` |
 | `LCD_BRIGHTNESS` | LCD brightness (0-100) | `100` |
+| `DISPLAY_SCROLL_SPEED` | Text scroll pixels per rendered frame | `1.0` |
 | `PISUGAR_ENABLED` | Enable battery monitor | `true` |
 | `XIAOZHI_LOCAL_COMMAND_TOOL_ENABLED` | Expose the `local_command` MCP tool | `true` |
 | `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` | Comma-separated executable names allowed by `local_command` | `date,uptime,hostname,whoami,df,free,ip,iwgetid,vcgencmd` |
 | `XIAOZHI_LOCAL_COMMAND_UNSAFE` | Allow any local executable; use only on trusted devices | `false` |
+| `XIAOZHI_LOCAL_COMMAND_USE_SHELL` | Enable shell syntax for `local_command`; requires unsafe mode | `false` |
 | `XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC` | Max seconds per local command | `5` |
 | `XIAOZHI_LOCAL_COMMAND_OUTPUT_LIMIT` | Max stdout/stderr characters returned | `4000` |
+| `XIAOZHI_WEB_TOOLS_ENABLED` | Expose `fetch_webpage` and `web_search` MCP tools | `true` |
+| `XIAOZHI_WEB_TOOL_PROXY` | Optional proxy URL for web tools; falls back to `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` | — |
+| `XIAOZHI_WEB_TOOL_TIMEOUT_SEC` | HTTP timeout for web tools | `15` |
+| `XIAOZHI_WEB_TOOL_TEXT_LIMIT` | Max webpage text characters returned | `6000` |
+| `XIAOZHI_WEB_TOOL_LINK_LIMIT` | Max links returned per fetched webpage | `30` |
+| `XIAOZHI_WEB_SEARCH_RESULT_LIMIT` | Max web search results returned | `5` |
+| `XIAOZHI_GOOGLE_SEARCH_API_KEY` | Google Programmable Search JSON API key for `search_type=sites` | — |
+| `XIAOZHI_GOOGLE_SEARCH_ENGINE_ID` | Google Programmable Search Engine ID (`cx`) for `search_type=sites` | — |
 
-## MCP Local Command Tool
+## MCP Tools
 
 When MCP is enabled by the XiaoZhi gateway, the device advertises a `local_command`
 tool. It accepts a `command` string and optional `timeout`, runs the command
 locally without a shell, and returns `stdout`, `stderr`, and `exit_code`.
 By default only the executables in `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` can run.
 Set `XIAOZHI_LOCAL_COMMAND_UNSAFE=true` only for fully trusted deployments.
+Set `XIAOZHI_LOCAL_COMMAND_USE_SHELL=true` as well if commands need shell
+features such as pipes, redirects, `&&`, or sudo password piping.
+
+When `XIAOZHI_WEB_TOOLS_ENABLED=true`, the device also advertises:
+
+- `fetch_webpage`: fetches an HTTP(S) URL and returns the page title, readable text, and links. It can also open a link from the current or previous page using `link_text` or `link_index`.
+- `web_search`: searches the web and returns compact result titles and URLs. `search_type=web` uses DuckDuckGo HTML, `search_type=news` uses Google News RSS, and `search_type=sites` uses Google Programmable Search JSON API when configured.
+
+Set `XIAOZHI_WEB_TOOL_PROXY` to route those web requests through a proxy, or leave it
+empty to use standard proxy environment variables if they are already set.
 
 ## Auto-Start on Boot
 

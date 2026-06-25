@@ -78,11 +78,20 @@ async def run_local_command(params: dict) -> dict:
     timeout = max(0.1, min(timeout, config.LOCAL_COMMAND_TIMEOUT_SEC))
 
     log.info("running local command tool: %s", command)
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    if config.LOCAL_COMMAND_USE_SHELL:
+        if not config.LOCAL_COMMAND_UNSAFE:
+            raise PermissionError("shell execution requires XIAOZHI_LOCAL_COMMAND_UNSAFE=true")
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    else:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
