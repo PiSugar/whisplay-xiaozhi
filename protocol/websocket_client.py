@@ -170,6 +170,10 @@ class XiaoZhiClient:
             log.error("receive error: %s", e)
         finally:
             self._connected = False
+            close_code = getattr(self._ws, "close_code", None)
+            close_reason = getattr(self._ws, "close_reason", None)
+            log.info("receive loop ended (code=%s, reason=%s, goodbye=%s)",
+                     close_code, close_reason, self._goodbye_received)
             if self._goodbye_received:
                 log.info("session ended by goodbye, not triggering reconnect")
             elif self.on_disconnected:

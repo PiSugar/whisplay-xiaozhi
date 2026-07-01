@@ -41,7 +41,7 @@ _TITLE_OFFSET_Y = -5
 _EMOJI_OFFSET_Y = 10
 _STATUS_ICON_GROUP_DOWN_PX = 5
 _TOOL_TAG_RE = re.compile(
-    r"[%％﹪]\s*([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*)",
+    r"(?<![A-Za-z0-9_])[%％﹪]\s*([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*)\s*(?:\.\.\.|…)",
     re.IGNORECASE,
 )
 _TOOL_TAG_BG = (8, 42, 112)
@@ -400,43 +400,8 @@ class UIRenderer(threading.Thread):
                 elif lines and 0 < i < len(parts) - 1:
                     lines.append("")
 
-        def consume_tail_after_marker(value: str, tool_name: str = "") -> tuple[str, int]:
-            tail = value.lstrip(" \t:-—,，.。…")
-            if not tail:
-                return "", 0
-
-            def is_tool_arg_token(token: str, current_tool: str = "") -> bool:
-                if re.fullmatch(r"[A-Za-z0-9_./:=+-]+", token):
-                    return True
-                if current_tool.lower() == "local_command":
-                    return False
-                if len(token) <= 8 and not re.search(r"[。！？；，,.!?;]", token):
-                    return True
-                return False
-
-            extra_count = 0
-            consumed_current_arg = False
-            while tail:
-                parts = tail.split(None, 1)
-                first = parts[0]
-                rest = parts[1].lstrip(" \t:-—,，.。…") if len(parts) > 1 else ""
-
-                if tool_name and first.lower() == tool_name.lower():
-                    extra_count += 1
-                    tail = rest
-                    parts = tail.split(None, 1)
-                    if parts and is_tool_arg_token(parts[0], tool_name):
-                        tail = parts[1].lstrip(" \t:-—,，.。…") if len(parts) > 1 else ""
-                    continue
-
-                if not consumed_current_arg and is_tool_arg_token(first, tool_name):
-                    consumed_current_arg = True
-                    tail = rest
-                    continue
-
-                return tail, extra_count
-
-            return "", extra_count
+        def visible_tail_after_marker(value: str) -> str:
+            return value.lstrip(" \t:-—,，.。…")
 
         for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
             matches = list(_TOOL_TAG_RE.finditer(raw_line))
@@ -453,21 +418,14 @@ class UIRenderer(threading.Thread):
             cursor = matches[0].start()
             for match in matches:
                 between = raw_line[cursor:match.start()]
-                visible_between, extra_count = consume_tail_after_marker(
-                    between,
-                    pending_tool_name if pending_tool_name else "",
-                )
-                for _ in range(extra_count):
-                    append_tool_tag(pending_tool_name)
+                visible_between = visible_tail_after_marker(between)
                 if visible_between.strip():
                     flush_tool_tag()
                     append_text(visible_between)
                 append_tool_tag(match.group(1))
                 cursor = match.end()
 
-            tail, extra_count = consume_tail_after_marker(raw_line[cursor:], pending_tool_name)
-            for _ in range(extra_count):
-                append_tool_tag(pending_tool_name)
+            tail = visible_tail_after_marker(raw_line[cursor:])
             if tail.strip():
                 flush_tool_tag()
                 append_text(tail)

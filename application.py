@@ -19,6 +19,8 @@ import asyncio
 import logging
 import os
 import signal
+import string
+import time
 from typing import Any
 
 import config
@@ -53,6 +55,12 @@ from iot.thing_manager import ThingManager
 from iot.things.speaker import Speaker
 
 log = logging.getLogger("app")
+
+_IGNORABLE_STT_CHARS = set(string.punctuation) | set("，。！？；：、“”‘’（）【】《》·…—-～ \t\r\n")
+
+
+def _is_ignorable_stt(text: str) -> bool:
+    return not text or all(ch in _IGNORABLE_STT_CHARS for ch in text.strip())
 
 
 class Application:
@@ -120,10 +128,13 @@ class Application:
         self._receive_task: asyncio.Task | None = None
         self._running = False
         self._tts_text_buffer: str = ""
+        self._tts_audio_frames = 0
         self._reconnecting = False  # Prevent concurrent reconnect storms
+        self._reconnect_task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._keep_listening = False  # Auto-restart listening after TTS
         self._listen_after_connect = False  # Auto-start listening after reconnect
+        self._last_late_ignorable_stt_at = 0.0
 
     @property
     def state(self) -> str:
@@ -193,6 +204,8 @@ class Application:
             self._recording_task.cancel()
         if self._receive_task:
             self._receive_task.cancel()
+        if self._reconnect_task:
+            self._reconnect_task.cancel()
 
         # Stop components
         self.recorder.stop()
@@ -447,27 +460,68 @@ class Application:
             self._set_state(self.IDLE)
             self._update_display(status="xiaozhi", emoji="\U0001f604", text="Press button to wake...")
             return
+        if (
+            self._state == self.SPEAKING
+            and self._last_late_ignorable_stt_at
+            and time.monotonic() - self._last_late_ignorable_stt_at < 5
+        ):
+            log.info(
+                "server closed after late empty STT during speaking; "
+                "draining %d TTS audio frames without reconnect",
+                self._tts_audio_frames,
+            )
+            self._keep_listening = False
+            await self.player.stop()
+            self._set_state(self.IDLE)
+            self._update_display(status="Connected", emoji="\U0001f604", text="Press button to wake...")
+            return
         # Only auto-reconnect if user was actively interacting
-        if self._state in (self.LISTENING, self.SPEAKING):
-            await self._reconnect()
+        if self._state == self.LISTENING:
+            self._schedule_reconnect()
+        elif self._state == self.SPEAKING:
+            log.info(
+                "server closed while speaking; draining %d TTS audio frames without reconnect",
+                self._tts_audio_frames,
+            )
+            self._keep_listening = False
+            await self.player.stop()
+            self._set_state(self.IDLE)
+            self._update_display(status="Connected", emoji="\U0001f604", text="Press button to wake...")
         else:
             # Idle disconnect (server timeout) — wait for button press
             log.info("idle disconnect, waiting for button press to reconnect")
             self._set_state(self.IDLE)
             self._update_display(status="xiaozhi", emoji="\U0001f604", text="Press button to wake...")
 
-    async def _reconnect(self):
+    def _schedule_reconnect(self, *, silent: bool = False, resume_listening: bool = False):
+        """Schedule reconnect outside protocol receive-loop callbacks."""
+        if self._reconnect_task and not self._reconnect_task.done():
+            if resume_listening:
+                self._listen_after_connect = True
+            return
+
+        async def _runner():
+            try:
+                await self._reconnect(silent=silent, resume_listening=resume_listening)
+            finally:
+                self._reconnect_task = None
+
+        self._reconnect_task = asyncio.create_task(_runner())
+
+    async def _reconnect(self, *, silent: bool = False, resume_listening: bool = False):
         """Reconnect to server (called from disconnect handler or button press)."""
         if self._reconnecting:
             return
         self._reconnecting = True
         self._keep_listening = False
+        self._listen_after_connect = resume_listening
         try:
             log.warning("disconnected from server, reconnecting...")
             self.recorder.stop()
             await self.player.stop()
-            self._set_state(self.IDLE)
-            self._update_display(status="Reconnecting...", emoji="🔄", text="")
+            if not silent:
+                self._set_state(self.IDLE)
+                self._update_display(status="Reconnecting...", emoji="🔄", text="")
             await asyncio.sleep(2)  # Brief delay before reconnecting
             await self._activate_and_connect()
         except Exception as e:
@@ -502,8 +556,7 @@ class Application:
         # If disconnected, trigger reconnect and auto-listen after
         if not self.client or not self.client.connected:
             if not self._reconnecting:
-                self._listen_after_connect = True
-                asyncio.create_task(self._reconnect())
+                self._schedule_reconnect(resume_listening=True)
             return
 
         if self._state == self.SPEAKING:
@@ -541,8 +594,13 @@ class Application:
         self.recorder.start()
         self._recording_task = asyncio.create_task(self._stream_audio())
 
-    async def _stop_listening(self):
-        """Stop recording and notify server."""
+    async def _stop_listening(self, *, notify_server: bool = False):
+        """Stop local recording.
+
+        In auto/VAD mode the server already knows when listening has stopped.
+        Echoing a listen_stop while the server is transitioning to TTS can make
+        the gateway close the session before the answer audio finishes.
+        """
         self.recorder.stop()
         if self._recording_task:
             self._recording_task.cancel()
@@ -551,7 +609,8 @@ class Application:
             except asyncio.CancelledError:
                 pass
             self._recording_task = None
-        await self.client.send_listen_stop()
+        if notify_server and self.client and self.client.connected:
+            await self.client.send_listen_stop()
 
     async def _stream_audio(self):
         """Record PCM, encode to Opus, and send to server."""
@@ -579,10 +638,16 @@ class Application:
     async def _on_stt(self, text: str):
         """Received ASR result from server."""
         log.info("STT: %s", text)
+        if self._state != self.LISTENING:
+            if _is_ignorable_stt(text):
+                self._last_late_ignorable_stt_at = time.monotonic()
+                log.info("ignored late/empty STT while %s: %r", self._state, text)
+                return
+            log.warning("received STT while %s, ignoring: %s", self._state, text)
+            return
         # Server recognized speech; stop recording (server VAD triggered)
-        if self._state == self.LISTENING:
-            await self._stop_listening()
-            self._update_display(status="Thinking...", emoji="🤔")
+        await self._stop_listening()
+        self._update_display(status="Thinking...", emoji="🤔")
         self._update_display(text=f"🗣️ {text}")
 
     async def _on_llm_emotion(self, emoji: str):
@@ -591,6 +656,7 @@ class Application:
 
     async def _on_tts_start(self):
         """TTS playback starting."""
+        self._tts_audio_frames = 0
         self._set_state(self.SPEAKING)
         self._update_display(status="Speaking...")
         self.player.start()
@@ -599,6 +665,7 @@ class Application:
         """Received Opus TTS audio frame."""
         try:
             pcm = self.decoder.decode(opus_data)
+            self._tts_audio_frames += 1
             await self.player.put(pcm)
         except Exception as e:
             log.error("decode error: %s", e)
@@ -610,6 +677,7 @@ class Application:
 
     async def _on_tts_stop(self):
         """TTS playback finished. Auto-restart listening if in conversation."""
+        log.info("TTS stop received after %d audio frames", self._tts_audio_frames)
         await self.player.stop()
         if self._keep_listening and self.client and self.client.connected:
             await self._start_listening()
