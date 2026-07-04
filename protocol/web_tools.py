@@ -10,6 +10,7 @@ import html
 import logging
 import os
 import re
+from typing import Callable
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 from xml.etree import ElementTree
@@ -19,6 +20,8 @@ import requests
 import config
 
 log = logging.getLogger("mcp.web")
+
+ProgressCallback = Callable[[str | None], None]
 
 
 FETCH_WEBPAGE_INPUT_SCHEMA = {
@@ -370,7 +373,14 @@ def _extract_page_sync(url: str, max_chars: int) -> dict:
     }
 
 
-async def fetch_webpage(params: dict) -> dict:
+def _short_label(value: str, limit: int = 96) -> str:
+    value = _clean_text(value)
+    if len(value) <= limit:
+        return value
+    return value[: limit - 3].rstrip() + "..."
+
+
+async def fetch_webpage(params: dict, progress_callback: ProgressCallback | None = None) -> dict:
     link_text = str(params.get("link_text", "")).strip()
     link_index = params.get("link_index")
     requested_url = str(params.get("url", "")).strip()
@@ -385,6 +395,8 @@ async def fetch_webpage(params: dict) -> dict:
 
     if link_text or link_index not in (None, ""):
         if requested_url:
+            if progress_callback:
+                progress_callback(f"fetch base\n{_short_label(_normalize_url(requested_url), 120)}")
             base_page = await asyncio.to_thread(
                 _extract_page_sync,
                 _normalize_url(requested_url),
@@ -403,7 +415,14 @@ async def fetch_webpage(params: dict) -> dict:
         url = _normalize_url(requested_url or current_url)
 
     log.info("fetching webpage: %s", url)
-    return await asyncio.to_thread(_extract_page_sync, url, max_chars)
+    if progress_callback:
+        progress_callback(f"fetch_webpage\n{_short_label(url, 120)}")
+    result = await asyncio.to_thread(_extract_page_sync, url, max_chars)
+    if progress_callback:
+        title = result.get("title") or result.get("url") or "done"
+        text_len = len(str(result.get("text", "")))
+        progress_callback(f"fetched {result.get('status_code', '')}\n{_short_label(str(title), 120)}\n{text_len} chars")
+    return result
 
 
 async def get_webpage_text(params: dict) -> dict:
@@ -649,7 +668,7 @@ def _search_web_sync(query: str, num_results: int, search_type: str) -> dict:
     return _search_duckduckgo_sync(query, num_results)
 
 
-async def web_search(params: dict) -> dict:
+async def web_search(params: dict, progress_callback: ProgressCallback | None = None) -> dict:
     query = str(params.get("query", "")).strip()
     if not query:
         raise ValueError("query is required")
@@ -661,7 +680,15 @@ async def web_search(params: dict) -> dict:
     num_results = max(1, min(num_results, config.WEB_SEARCH_RESULT_LIMIT))
     search_type = str(params.get("search_type", "web")).strip() or "web"
     log.info("running web search type=%s query=%s", search_type, query)
-    return await asyncio.to_thread(_search_web_sync, query, num_results, search_type)
+    if progress_callback:
+        progress_callback(f"web_search {search_type}\n{_short_label(query, 120)}")
+    result = await asyncio.to_thread(_search_web_sync, query, num_results, search_type)
+    if progress_callback:
+        results = result.get("results", [])
+        source = result.get("source", "search")
+        first = results[0].get("title", "") if results else "no results"
+        progress_callback(f"{source}\n{len(results)} results\n{_short_label(str(first), 120)}")
+    return result
 
 
 async def google_search(params: dict) -> dict:

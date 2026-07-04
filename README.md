@@ -129,6 +129,7 @@ whisplay-xiaozhi/
 | `XIAOZHI_LOCAL_COMMAND_UNSAFE` | Allow any local executable; use only on trusted devices | `false` |
 | `XIAOZHI_LOCAL_COMMAND_USE_SHELL` | Enable shell syntax for `local_command`; requires unsafe mode | `false` |
 | `XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC` | Max seconds per local command | `5` |
+| `XIAOZHI_LOCAL_COMMAND_CHECK_INTERVAL_SEC` | Minimum seconds between running-job `checkCommand` responses | `5` |
 | `XIAOZHI_LOCAL_COMMAND_OUTPUT_LIMIT` | Max stdout/stderr characters returned | `4000` |
 | `XIAOZHI_WEB_TOOLS_ENABLED` | Expose `fetch_webpage` and `web_search` MCP tools | `true` |
 | `XIAOZHI_WEB_TOOL_PROXY` | Optional proxy URL for web tools; falls back to `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` | — |
@@ -143,7 +144,11 @@ whisplay-xiaozhi/
 
 When MCP is enabled by the XiaoZhi gateway, the device advertises a `local_command`
 tool. It accepts a `command` string and optional `timeout`, runs the command
-locally without a shell, and returns `stdout`, `stderr`, and `exit_code`.
+locally without a shell, and returns `stdout`, `stderr`, and `exit_code`. If the
+command is still running after `XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC`, it continues
+in the background and returns `status=running` with a `job_id`; use
+`checkCommand` to read the latest output or final result, and `stopCommand` to
+stop it.
 By default only the executables in `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` can run.
 Set `XIAOZHI_LOCAL_COMMAND_UNSAFE=true` only for fully trusted deployments.
 Set `XIAOZHI_LOCAL_COMMAND_USE_SHELL=true` as well if commands need shell

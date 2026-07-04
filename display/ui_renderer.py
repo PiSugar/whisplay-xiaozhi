@@ -48,6 +48,9 @@ _TOOL_TAG_BG = (8, 42, 112)
 _TOOL_TAG_FG = (255, 255, 255)
 _TOOL_TAG_COUNT_FG = (122, 205, 255)
 _TOOL_TAG_MARGIN_Y = 2
+_TERMINAL_FG = (80, 255, 120)
+_TERMINAL_MARGIN_X = 8
+_TERMINAL_MAX_LINES = 5
 
 
 def _find_font(custom_path: str = "") -> str:
@@ -69,6 +72,7 @@ class DisplayState:
         self.battery_level: int = -1
         self.battery_color: tuple[int, int, int] = (128, 128, 128)
         self.wifi_signal_level: int = 0
+        self.terminal_text: str = ""
         self.scroll_top: float = 0.0
         self.scroll_speed: float = max(0.0, config.DISPLAY_SCROLL_SPEED)
         self._prev_text: str = ""
@@ -86,7 +90,7 @@ class DisplayState:
 
             for key in (
                 "status", "emoji", "battery_level", "battery_color",
-                "wifi_signal_level", "scroll_speed",
+                "wifi_signal_level", "scroll_speed", "terminal_text",
             ):
                 if key in kwargs and kwargs[key] is not None:
                     setattr(self, key, kwargs[key])
@@ -100,6 +104,7 @@ class DisplayState:
                 "battery_level": self.battery_level,
                 "battery_color": self.battery_color,
                 "wifi_signal_level": self.wifi_signal_level,
+                "terminal_text": self.terminal_text,
                 "scroll_top": self.scroll_top,
                 "scroll_speed": self.scroll_speed,
             }
@@ -127,6 +132,7 @@ class UIRenderer(threading.Thread):
         self._emoji_font = None
         self._battery_font = None
         self._tool_tag_font = None
+        self._terminal_font = None
         self._line_height = 0
         self._wifi_source_icon_cache: dict[str, Image.Image | None] = {}
         self._wifi_scaled_icon_cache: dict[tuple[str, int, float], Image.Image | None] = {}
@@ -137,6 +143,7 @@ class UIRenderer(threading.Thread):
             self._emoji_font = ImageFont.truetype(resolved, 40)
             self._battery_font = ImageFont.truetype(resolved, 13)
             self._tool_tag_font = ImageFont.truetype(resolved, 17)
+            self._terminal_font = ImageFont.truetype(resolved, 8)
             asc, desc = self._text_font.getmetrics()
             self._line_height = asc + desc
 
@@ -207,15 +214,58 @@ class UIRenderer(threading.Thread):
             (self.board.CornerHeight, _HEADER_TOP_Y + _TITLE_OFFSET_Y),
         )
 
-        # Emoji (centered)
+        # Emoji is centered normally; command output temporarily shares this row.
         emoji = snap["emoji"]
         if self._emoji_font:
             bbox = self._emoji_font.getbbox(emoji)
             ew = bbox[2] - bbox[0]
-            draw_mixed_text(image, emoji, self._emoji_font, ((width - ew) // 2, 28 + _EMOJI_OFFSET_Y))
+            terminal_text = snap.get("terminal_text", "")
+            emoji_x = (width - ew) // 2
+            if terminal_text:
+                emoji_x = self.board.CornerHeight
+            draw_mixed_text(image, emoji, self._emoji_font, (emoji_x, 28 + _EMOJI_OFFSET_Y))
+            if terminal_text:
+                term_x = emoji_x + ew + _TERMINAL_MARGIN_X
+                self._draw_terminal_output(
+                    draw,
+                    terminal_text,
+                    term_x,
+                    29 + _EMOJI_OFFSET_Y,
+                    width - term_x - _TERMINAL_MARGIN_X,
+                )
 
         # Battery icon (top-right)
         self._draw_status_icons(draw, snap, width)
+
+    def _draw_terminal_output(
+        self,
+        draw: ImageDraw.Draw,
+        text: str,
+        x: int,
+        y: int,
+        max_width: int,
+    ):
+        if not self._terminal_font or max_width <= 4:
+            return
+        font = self._terminal_font
+        lines = [line for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line]
+        lines = lines[-_TERMINAL_MAX_LINES:]
+        line_h = max(8, font.getbbox("Ag")[3] - font.getbbox("Ag")[1] + 1)
+        for index, line in enumerate(lines):
+            clipped = self._clip_to_width(line, font, max_width)
+            draw.text((x, y + index * line_h), clipped, font=font, fill=_TERMINAL_FG)
+
+    def _clip_to_width(self, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+        if font.getlength(text) <= max_width:
+            return text
+        ellipsis = "..."
+        available = max(0, max_width - int(font.getlength(ellipsis)))
+        clipped = ""
+        for char in text:
+            if font.getlength(clipped + char) > available:
+                break
+            clipped += char
+        return clipped + ellipsis
 
     def _draw_status_icons(self, draw: ImageDraw.Draw, snap: dict, width: int):
         cursor_x = width - 15

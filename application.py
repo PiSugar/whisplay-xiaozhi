@@ -36,10 +36,16 @@ from protocol.websocket_client import XiaoZhiClient
 from protocol.mqtt_client import XiaoZhiMqttClient
 from protocol.mcp_handler import McpHandler
 from protocol.local_command_tool import (
+    CHECK_COMMAND_DESCRIPTION,
+    CHECK_COMMAND_INPUT_SCHEMA,
     DESCRIPTION as LOCAL_COMMAND_DESCRIPTION,
     INPUT_SCHEMA as LOCAL_COMMAND_INPUT_SCHEMA,
+    STOP_COMMAND_DESCRIPTION,
+    STOP_COMMAND_INPUT_SCHEMA,
+    check_command,
     is_enabled as local_command_is_enabled,
     run_local_command,
+    stop_command,
 )
 from protocol.web_tools import (
     FETCH_WEBPAGE_DESCRIPTION,
@@ -104,20 +110,32 @@ class Application:
         if local_command_is_enabled():
             self.mcp.register(
                 "local_command",
-                run_local_command,
+                self._run_local_command_with_display,
                 description=LOCAL_COMMAND_DESCRIPTION,
                 input_schema=LOCAL_COMMAND_INPUT_SCHEMA,
+            )
+            self.mcp.register(
+                "checkCommand",
+                self._check_command_with_display,
+                description=CHECK_COMMAND_DESCRIPTION,
+                input_schema=CHECK_COMMAND_INPUT_SCHEMA,
+            )
+            self.mcp.register(
+                "stopCommand",
+                self._stop_command_with_display,
+                description=STOP_COMMAND_DESCRIPTION,
+                input_schema=STOP_COMMAND_INPUT_SCHEMA,
             )
         if web_tools_is_enabled():
             self.mcp.register(
                 "fetch_webpage",
-                fetch_webpage,
+                self._fetch_webpage_with_display,
                 description=FETCH_WEBPAGE_DESCRIPTION,
                 input_schema=FETCH_WEBPAGE_INPUT_SCHEMA,
             )
             self.mcp.register(
                 "web_search",
-                web_search,
+                self._web_search_with_display,
                 description=WEB_SEARCH_DESCRIPTION,
                 input_schema=WEB_SEARCH_INPUT_SCHEMA,
             )
@@ -135,6 +153,8 @@ class Application:
         self._keep_listening = False  # Auto-restart listening after TTS
         self._listen_after_connect = False  # Auto-start listening after reconnect
         self._last_late_ignorable_stt_at = 0.0
+        self._terminal_clear_task: asyncio.Task | None = None
+        self._terminal_shown_at: float | None = None
 
     @property
     def state(self) -> str:
@@ -206,6 +226,9 @@ class Application:
             self._receive_task.cancel()
         if self._reconnect_task:
             self._reconnect_task.cancel()
+        if self._terminal_clear_task:
+            self._terminal_clear_task.cancel()
+            self._terminal_clear_task = None
 
         # Stop components
         self.recorder.stop()
@@ -672,8 +695,26 @@ class Application:
 
     async def _on_tts_sentence_start(self, text: str):
         """New TTS sentence starting."""
-        self._tts_text_buffer += text
+        self._tts_text_buffer = self._append_tts_text(self._tts_text_buffer, text)
         self._update_display(text=self._tts_text_buffer)
+
+    def _append_tts_text(self, current: str, text: str) -> str:
+        if not current:
+            return text
+        if not text:
+            return current
+        if self._needs_tts_join_space(current[-1], text[0]):
+            return current + " " + text
+        return current + text
+
+    def _needs_tts_join_space(self, left: str, right: str) -> bool:
+        if left.isspace() or right.isspace():
+            return False
+        if right in ",.!?:;%)]}，。！？：；、）】》":
+            return False
+        if left in "([{（【《":
+            return False
+        return left.isascii() and right.isascii() and (left.isalnum() or left in "%") and right.isalnum()
 
     async def _on_tts_stop(self):
         """TTS playback finished. Auto-restart listening if in conversation."""
@@ -742,6 +783,72 @@ class Application:
     def _update_display(self, **kwargs):
         if self.display:
             self.display.update(**kwargs)
+
+    async def _run_local_command_with_display(self, params: dict) -> dict:
+        return await run_local_command(params, output_callback=self._update_terminal_progress)
+
+    async def _check_command_with_display(self, params: dict) -> dict:
+        result = await check_command(params)
+        tail = str(result.get("output_tail", "")).strip()
+        status = str(result.get("status", ""))
+        job_id = str(result.get("job_id", ""))
+        self._update_terminal_progress(f"{status} {job_id}\n{tail}".strip())
+        self._schedule_terminal_clear()
+        return result
+
+    async def _stop_command_with_display(self, params: dict) -> dict:
+        result = await stop_command(params)
+        tail = str(result.get("output_tail", "")).strip()
+        status = str(result.get("status", ""))
+        job_id = str(result.get("job_id", ""))
+        self._update_terminal_progress(f"{status} {job_id}\n{tail}".strip())
+        self._schedule_terminal_clear()
+        return result
+
+    async def _fetch_webpage_with_display(self, params: dict) -> dict:
+        try:
+            return await fetch_webpage(params, progress_callback=self._update_terminal_progress)
+        finally:
+            self._schedule_terminal_clear()
+
+    async def _web_search_with_display(self, params: dict) -> dict:
+        try:
+            return await web_search(params, progress_callback=self._update_terminal_progress)
+        finally:
+            self._schedule_terminal_clear()
+
+    def _update_terminal_progress(self, text: str | None):
+        if text is None:
+            self._schedule_terminal_clear()
+            return
+        if self._terminal_clear_task:
+            self._terminal_clear_task.cancel()
+            self._terminal_clear_task = None
+        if self._terminal_shown_at is None:
+            self._terminal_shown_at = asyncio.get_running_loop().time()
+        self._update_display(terminal_text=text or "")
+
+    def _schedule_terminal_clear(self):
+        if self._terminal_clear_task:
+            return
+        if self._terminal_shown_at is None:
+            self._update_display(terminal_text="")
+            return
+        self._terminal_clear_task = asyncio.create_task(self._clear_terminal_after_min_visible())
+
+    async def _clear_terminal_after_min_visible(self):
+        try:
+            min_visible_sec = 1.0
+            shown_at = self._terminal_shown_at
+            if shown_at is not None:
+                elapsed = asyncio.get_running_loop().time() - shown_at
+                if elapsed < min_visible_sec:
+                    await asyncio.sleep(min_visible_sec - elapsed)
+            self._update_display(terminal_text="")
+        finally:
+            if self._terminal_clear_task is asyncio.current_task():
+                self._terminal_shown_at = None
+                self._terminal_clear_task = None
 
     async def _status_display_loop(self):
         """Periodically update battery / network status in the header."""

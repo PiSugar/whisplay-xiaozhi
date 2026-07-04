@@ -129,6 +129,7 @@ whisplay-xiaozhi/
 | `XIAOZHI_LOCAL_COMMAND_UNSAFE` | 允许执行任意本地程序；仅可信设备/网络使用 | `false` |
 | `XIAOZHI_LOCAL_COMMAND_USE_SHELL` | 为 `local_command` 启用 shell 语法；需要同时启用 unsafe | `false` |
 | `XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC` | 单次本地命令最长执行秒数 | `5` |
+| `XIAOZHI_LOCAL_COMMAND_CHECK_INTERVAL_SEC` | 后台任务 `checkCommand` 返回之间的最小间隔秒数 | `5` |
 | `XIAOZHI_LOCAL_COMMAND_OUTPUT_LIMIT` | 返回 stdout/stderr 的最大字符数 | `4000` |
 | `XIAOZHI_WEB_TOOLS_ENABLED` | 向小智暴露 `fetch_webpage` 和 `web_search` MCP 工具 | `true` |
 | `XIAOZHI_WEB_TOOL_PROXY` | 网页工具使用的可选代理；为空时回退到 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` | — |
@@ -143,7 +144,10 @@ whisplay-xiaozhi/
 
 当小智网关启用 MCP 时，设备会注册 `local_command` 工具。工具接收
 `command` 字符串和可选的 `timeout`，不经过 shell 直接在本机执行命令，
-并返回 `stdout`、`stderr` 和 `exit_code`。默认只允许执行
+并返回 `stdout`、`stderr` 和 `exit_code`。如果命令运行超过
+`XIAOZHI_LOCAL_COMMAND_TIMEOUT_SEC`，命令会转入后台继续执行，并返回
+`status=running` 和 `job_id`；后续可用 `checkCommand` 读取最新输出或最终结果，
+也可用 `stopCommand` 停止任务。默认只允许执行
 `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` 中列出的命令名。如需开放任意命令，
 可设置 `XIAOZHI_LOCAL_COMMAND_UNSAFE=true`，但只应在完全可信的设备和网络中使用。
 如果需要管道、重定向、`&&` 或 sudo 密码管道等 shell 功能，还需要设置
