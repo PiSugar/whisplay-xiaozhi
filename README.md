@@ -123,11 +123,13 @@ playback. If speaker echo causes false triggers, raise `BARGE_IN_MIN_RMS`.
 
 ### Rust watercolor renderer
 
-`WATERCOLOR_BACKEND=auto` prefers the native renderer and safely falls back to
-Python when the extension is absent. The repository includes the Linux AArch64
+Watercolor mode always uses the Rust renderer and fails clearly when a
+compatible extension is absent. The repository includes the Linux AArch64
 extension built on a CM5 and validated on a Zero 2 W at
 `rust/watercolor_renderer/prebuilt/linux-aarch64/_watercolor_rust.so`. The app
 loads the deployed copy under `display/` first, then this archived build.
+The native path mirrors ChatGPT's three logarithmic audio bands, independent
+cumulative pigment phases, linear-burn colour layers, and watercolor texture.
 
 To rebuild it, use an AArch64 machine with Rust installed (a CM5 is suitable):
 
@@ -138,9 +140,11 @@ bash tools/build_watercolor_rust.sh
 The script archives the output under `prebuilt/linux-aarch64` and also copies it
 to `display/_watercolor_rust.so` for the current environment. For a Zero 2 W,
 the recommended setting is `WATERCOLOR_THREADS=2`; four threads maximize FPS
-but leave less CPU headroom for audio and networking. Use
-`WATERCOLOR_BACKEND=rust` to fail fast instead of falling back when validating
-a deployment.
+but leave less CPU headroom for audio and networking.
+On 32-bit Raspberry Pi OS the same script builds the identical Rust renderer
+natively and archives it under `prebuilt/linux-armv7l` or `prebuilt/linux-armv6l`.
+The installer selects the matching architecture automatically; Python is used
+only for caption layout and never for orb pixel rendering.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -162,7 +166,8 @@ a deployment.
 | `WATERCOLOR_RENDER_SCALE` | Internal render scale; lower is faster (0.2-1.0) | `0.37` |
 | `WATERCOLOR_SMOOTH_FBM` | Enable smoother FBM sampling on faster boards | `false` |
 | `WATERCOLOR_TEMPORAL_3D` | Enable higher-quality temporal noise | `false` |
-| `WATERCOLOR_BACKEND` | Renderer: `auto`, `rust`, or `python` | `auto` |
+| `WATERCOLOR_AUDIO_REACTIVITY` | Assistant audio deformation gain (0.5-5.0) | `3.6` |
+| `WATERCOLOR_SPEECH_MOTION` | Assistant pigment travel gain (0.5-5.0) | `4.5` |
 | `WATERCOLOR_THREADS` | Native renderer worker threads (1-4) | `2` |
 | `WATERCOLOR_CAPTION_PAGE_SECONDS` | Minimum seconds to show each caption page | `3.0` |
 | `WATERCOLOR_CAPTION_FONT_SIZE` | Watercolor caption font size in pixels (10-24) | `15` |

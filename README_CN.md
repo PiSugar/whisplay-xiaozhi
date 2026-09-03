@@ -122,10 +122,12 @@ whisplay-xiaozhi/
 
 ### Rust 水彩球渲染器
 
-`WATERCOLOR_BACKEND=auto` 会优先使用原生渲染器，扩展不存在时安全回退到
-Python。工程已包含在 CM5 上编译、并在 Zero 2 W 上验证过的 Linux AArch64
+水彩模式统一使用 Rust 渲染器；缺少兼容扩展时会明确报错，不再回退到
+Python 像素渲染。工程已包含在 CM5 上编译、并在 Zero 2 W 上验证过的 Linux AArch64
 预编译扩展：`rust/watercolor_renderer/prebuilt/linux-aarch64/_watercolor_rust.so`。
 程序会优先加载 `display/` 中的部署版本，找不到时直接加载该归档版本。
+原生路径复刻了 ChatGPT 的三个对数音频频段、独立颜料累计相位、线性加深混色
+以及水彩纹理，因此讲话时三层颜料会以不同方向和速度流动。
 
 需要重新构建时，请在安装了 Rust 的 AArch64 设备上执行（CM5 即可）：
 
@@ -136,7 +138,9 @@ bash tools/build_watercolor_rust.sh
 脚本会将产物归档到上述 `prebuilt/linux-aarch64` 目录，并复制一份到
 `display/_watercolor_rust.so` 供当前环境使用。Zero 2 W 推荐设置
 `WATERCOLOR_THREADS=2`；四线程帧率更高，但留给音频和网络的 CPU 余量更少。
-部署验证时可设置 `WATERCOLOR_BACKEND=rust`，让扩展缺失直接报错而不回退。
+在 32 位 Raspberry Pi OS 上，同一脚本会原生构建相同的 Rust 渲染器，并归档到
+`prebuilt/linux-armv7l` 或 `prebuilt/linux-armv6l`。安装程序会自动选择对应架构；
+Python 只负责字幕排版，不再负责水彩球像素渲染。
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
@@ -158,7 +162,8 @@ bash tools/build_watercolor_rust.sh
 | `WATERCOLOR_RENDER_SCALE` | 内部渲染比例，越低越省性能（0.2-1.0） | `0.37` |
 | `WATERCOLOR_SMOOTH_FBM` | 在高性能设备上启用平滑 FBM 采样 | `false` |
 | `WATERCOLOR_TEMPORAL_3D` | 启用更高质量的时域噪声 | `false` |
-| `WATERCOLOR_BACKEND` | 渲染后端：`auto`、`rust` 或 `python` | `auto` |
+| `WATERCOLOR_AUDIO_REACTIVITY` | 助手音频形变增益（0.5-5.0） | `3.6` |
+| `WATERCOLOR_SPEECH_MOTION` | 助手颜料运动增益（0.5-5.0） | `4.5` |
 | `WATERCOLOR_THREADS` | 原生渲染器工作线程数（1-4） | `2` |
 | `WATERCOLOR_CAPTION_PAGE_SECONDS` | 每页字幕的最短显示秒数 | `3.0` |
 | `WATERCOLOR_CAPTION_FONT_SIZE` | 水彩球字幕字号（10-24 像素） | `15` |

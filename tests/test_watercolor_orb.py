@@ -31,16 +31,17 @@ class _FakeBoard:
 
 
 class WatercolorOrbTests(unittest.TestCase):
-    def test_python_backend_can_be_selected_explicitly(self):
-        renderer = create_watercolor_renderer(backend="python", render_scale=0.2)
-        self.assertEqual(renderer.backend, "python")
+    def test_watercolor_requires_native_renderer(self):
+        with (
+            patch("display.watercolor_backend.NativeOrbRenderer", None),
+            self.assertRaisesRegex(RuntimeError, "requires the Rust extension"),
+        ):
+            create_watercolor_renderer(render_scale=0.2)
 
     def test_native_backend_frame_size_when_extension_is_built(self):
         if NativeOrbRenderer is None:
             self.skipTest("Rust watercolor extension is not built")
-        renderer = create_watercolor_renderer(
-            backend="rust", threads=2, render_scale=0.2
-        )
+        renderer = create_watercolor_renderer(threads=2, render_scale=0.2)
         plain = renderer.rgb565(1.0, 0.0)
         frame = renderer.rgb565(
             1.0,
@@ -78,6 +79,8 @@ class WatercolorOrbTests(unittest.TestCase):
         self.assertGreater(np.count_nonzero(expanded), np.count_nonzero(normal))
 
     def test_ui_renderer_selects_watercolor_and_accepts_pcm(self):
+        if NativeOrbRenderer is None:
+            self.skipTest("Rust watercolor extension is not built")
         board = _FakeBoard()
         font = next(
             (
@@ -105,6 +108,10 @@ class WatercolorOrbTests(unittest.TestCase):
         self.assertIsNotNone(ui._watercolor)
         self.assertIsNotNone(board.frame)
         self.assertEqual(len(board.frame[4]), 240 * 280 * 2)
+        # The reference 60 Hz accumulator advances pigment phase much farther
+        # than the old raw-duration sum, making one spoken chunk visible.
+        self.assertGreater(ui._audio["assistant"]["cumulative"][0], 0.5)
+        self.assertEqual(len(ui._audio["assistant"]["bands"]), 4)
 
     def test_watercolor_caption_starts_at_first_page_and_advances_slowly(self):
         ui = object.__new__(UIRenderer)

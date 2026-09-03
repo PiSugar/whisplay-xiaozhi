@@ -98,7 +98,7 @@ class Application:
             required_frames=config.BARGE_IN_REQUIRED_FRAMES,
             warmup_ms=config.BARGE_IN_WARMUP_MS,
         )
-        self.player.on_pcm_written = self._barge_in.update_speaker
+        self.player.on_pcm_written = self._on_speaker_pcm_written
         self.encoder = OpusEncoder(frame_duration_ms=60)
         self.decoder = OpusDecoder(frame_duration_ms=60)
 
@@ -770,13 +770,17 @@ class Application:
         try:
             pcm = self.decoder.decode(opus_data)
             self._tts_audio_frames += 1
-            if self.display:
-                self.display.update_audio(
-                    pcm, config.AUDIO_OUTPUT_SAMPLE_RATE, "assistant"
-                )
             await self.player.put(pcm)
         except Exception as e:
             log.error("decode error: %s", e)
+
+    def _on_speaker_pcm_written(self, pcm: bytes):
+        """Drive echo tracking and watercolor from audio entering playback."""
+        self._barge_in.update_speaker(pcm)
+        if self.display:
+            self.display.update_audio(
+                pcm, config.AUDIO_OUTPUT_SAMPLE_RATE, "assistant"
+            )
 
     async def _on_tts_sentence_start(self, text: str):
         """New TTS sentence starting."""

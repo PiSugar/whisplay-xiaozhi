@@ -10,14 +10,11 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 
-# Palette sampled from the current ChatGPT voice UI.  These are pigment
-# endpoints rather than final screen colours: the quadratic compositor below
-# turns them into the reference's continuous deep-blue -> sky-blue -> pale
-# cyan -> warm-white ramp without adding a separate saturated-blue patch.
-COLOR_MAIN = np.asarray((0xF5, 0xFA, 0xF6), dtype=np.float32) / 255.0
-COLOR_LOW = np.asarray((0x00, 0x50, 0xFC), dtype=np.float32) / 255.0
-COLOR_MID = np.asarray((0xAF, 0xDE, 0xFA), dtype=np.float32) / 255.0
-COLOR_HIGH = np.asarray((0xFA, 0xFC, 0xF0), dtype=np.float32) / 255.0
+# Shader-space palette recovered from the saved ChatGPT advanced-bloop bundle.
+COLOR_MAIN = np.asarray((0xDC, 0xF7, 0xFF), dtype=np.float32) / 255.0
+COLOR_LOW = np.asarray((0x01, 0x81, 0xFE), dtype=np.float32) / 255.0
+COLOR_MID = np.asarray((0xA4, 0xEF, 0xFF), dtype=np.float32) / 255.0
+COLOR_HIGH = np.asarray((0xFF, 0xFD, 0xEF), dtype=np.float32) / 255.0
 COLOR_TRANSITION = np.asarray((0x33, 0xA0, 0xFD), dtype=np.float32) / 255.0
 # Efficient-tier calibration is deliberately separate from the palette. It
 # compensates nearest FBM sampling while preserving a small population of

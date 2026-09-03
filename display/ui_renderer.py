@@ -167,7 +167,6 @@ class UIRenderer(threading.Thread):
 
         if self.ui_style == "watercolor":
             self._watercolor = create_watercolor_renderer(
-                backend=config.WATERCOLOR_BACKEND,
                 threads=config.WATERCOLOR_THREADS,
                 width=self.board.LCD_WIDTH,
                 height=self.board.LCD_HEIGHT,
@@ -175,6 +174,8 @@ class UIRenderer(threading.Thread):
                 render_scale=config.WATERCOLOR_RENDER_SCALE,
                 smooth_fbm=config.WATERCOLOR_SMOOTH_FBM,
                 temporal_3d=config.WATERCOLOR_TEMPORAL_3D,
+                audio_reactivity=config.WATERCOLOR_AUDIO_REACTIVITY,
+                speech_motion=config.WATERCOLOR_SPEECH_MOTION,
                 caption_font_path=resolved,
                 caption_font_size=config.WATERCOLOR_CAPTION_FONT_SIZE,
                 caption_offset_x=config.WATERCOLOR_CAPTION_OFFSET_X,
@@ -209,23 +210,46 @@ class UIRenderer(threading.Thread):
         rms = float(np.sqrt(np.mean(samples * samples)))
         peak = float(np.max(np.abs(samples)))
         level = min(1.0, rms * 5.5)
-        spectrum = np.abs(np.fft.rfft(samples * np.hanning(samples.size)))
+        window = np.hanning(samples.size)
+        # ChatGPT's advanced bloop analyses 240 linear FFT buckets, then
+        # collapses them into three logarithmic 20 Hz..Nyquist bands. Median
+        # energy prevents a single harmonic from moving every pigment layer.
+        spectrum_amplitude = (
+            np.abs(np.fft.rfft(samples * window))
+            * (2.0 / max(1.0, float(np.sum(window))))
+        )
+        spectrum_db = 20.0 * np.log10(np.maximum(spectrum_amplitude, 1.0e-8))
+        spectrum = np.sqrt(
+            np.clip(1.0 + np.clip(spectrum_db, -100.0, -10.0) / 100.0, 0.0, 1.0)
+        )
         frequencies = np.fft.rfftfreq(samples.size, 1.0 / max(1, sample_rate))
-        edges = ((80, 250), (250, 750), (750, 2500), (2500, 7000))
-        bands = []
-        for low, high in edges:
+        nyquist = max(40.0, sample_rate * 0.5)
+        edges = np.geomspace(20.0, nyquist, 4)
+        raw_bands = []
+        for index, (low, high) in enumerate(zip(edges[:-1], edges[1:])):
             values = spectrum[(frequencies >= low) & (frequencies < high)]
-            energy = float(np.sqrt(np.mean(values * values))) if values.size else 0.0
-            bands.append(min(1.0, energy / max(1.0, samples.size * 0.035)))
+            magnitude = float(np.median(values)) if values.size else 0.0
+            magnitude *= (10.0, 1.0, 1.0)[index]
+            raw_bands.append(magnitude / (magnitude + 1.0))
+        audible = spectrum[(frequencies >= 20.0) & (frequencies < nyquist)]
+        overall = float(np.median(audible)) if audible.size else 0.0
+        overall = overall / (overall + 1.0)
+        raw_audio = (*raw_bands, overall)
         duration = samples.size / max(1, sample_rate)
+        smoothing = 1.0 - math.exp(-duration / 2.0)
         now = time.monotonic()
         with self._audio_lock:
             target = self._audio[role]
             target["level"] = level
             target["peak"] = min(1.0, peak * 1.8)
-            target["bands"] = tuple(bands)
-            for index, value in enumerate(bands):
-                target["cumulative"][index] += value * duration
+            target["bands"] = tuple(
+                previous + (value - previous) * smoothing
+                for previous, value in zip(target["bands"], raw_audio)
+            )
+            # Continuous-time equivalent of ChatGPT's 60 Hz accumulator:
+            # each band advances independently at about 20 * magnitude/sec.
+            for index, value in enumerate(raw_audio):
+                target["cumulative"][index] += value * duration * 20.0
             target["updated_at"] = now
 
     def run(self):

@@ -64,6 +64,7 @@ sudo apt-get install -y \
     sox libsox-fmt-all \
     libopus0 libopus-dev \
     libcairo2-dev libgirepository1.0-dev \
+    cargo rustc \
     unzip
 
 echo "=== Creating Python virtual environment ==="
@@ -75,12 +76,22 @@ pip install --upgrade pip
 pip install -r requirements.txt
 pip install gpiod
 
-if command_exists cargo; then
-    echo "=== Building optional Rust watercolor renderer ==="
-    bash tools/build_watercolor_rust.sh || \
-        echo "Rust watercolor build failed; Python fallback remains available"
+echo "=== Preparing required Rust watercolor renderer ==="
+case "$(uname -m)" in
+    aarch64|arm64) WATERCOLOR_ARCH_DIR="linux-aarch64" ;;
+    armv7l|armv7) WATERCOLOR_ARCH_DIR="linux-armv7l" ;;
+    armv6l|armv6) WATERCOLOR_ARCH_DIR="linux-armv6l" ;;
+    *)
+        echo "Unsupported Raspberry Pi architecture: $(uname -m)" >&2
+        exit 1
+        ;;
+esac
+WATERCOLOR_PREBUILT="rust/watercolor_renderer/prebuilt/$WATERCOLOR_ARCH_DIR/_watercolor_rust.so"
+if [ -f "$WATERCOLOR_PREBUILT" ]; then
+    cp "$WATERCOLOR_PREBUILT" display/_watercolor_rust.so
+    echo "Installed prebuilt Rust renderer for $(uname -m)"
 else
-    echo "cargo not found; watercolor UI will use the Python fallback"
+    bash tools/build_watercolor_rust.sh
 fi
 
 echo "=== Ensuring gpiod runtime is available ==="

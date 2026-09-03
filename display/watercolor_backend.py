@@ -22,14 +22,25 @@ def _load_native_renderer():
     except ImportError:
         pass
 
-    if platform.system() != "Linux" or platform.machine() not in ("aarch64", "arm64"):
+    if platform.system() != "Linux":
+        return None
+    machine = platform.machine().lower()
+    architecture = {
+        "aarch64": "linux-aarch64",
+        "arm64": "linux-aarch64",
+        "armv7l": "linux-armv7l",
+        "armv7": "linux-armv7l",
+        "armv6l": "linux-armv6l",
+        "armv6": "linux-armv6l",
+    }.get(machine)
+    if architecture is None:
         return None
     extension = (
         Path(__file__).resolve().parent.parent
         / "rust"
         / "watercolor_renderer"
         / "prebuilt"
-        / "linux-aarch64"
+        / architecture
         / "_watercolor_rust.so"
     )
     if not extension.is_file():
@@ -157,20 +168,13 @@ class RustOrbRenderer:
         )
 
 
-def create_watercolor_renderer(*, backend: str = "auto", threads: int = 2, **kwargs):
-    """Create the requested backend, falling back only in auto mode."""
-    selected = backend.lower()
-    if selected in ("auto", "rust") and NativeOrbRenderer is not None:
-        renderer = RustOrbRenderer(threads=threads, **kwargs)
-        log.info("using Rust watercolor renderer (%d threads)", threads)
-        return renderer
-    if selected == "rust":
+def create_watercolor_renderer(*, threads: int = 2, **kwargs):
+    """Create the required native renderer; watercolor has no pixel fallback."""
+    if NativeOrbRenderer is None:
         raise RuntimeError(
-            "WATERCOLOR_BACKEND=rust but no compatible Rust extension is available; "
-            "run tools/build_watercolor_rust.sh"
+            "Watercolor mode requires the Rust extension; "
+            "run tools/build_watercolor_rust.sh on this platform"
         )
-    if selected == "auto":
-        log.info("Rust watercolor extension unavailable; using Python renderer")
-    renderer = PythonOrbRenderer(**kwargs)
-    renderer.backend = "python"
+    renderer = RustOrbRenderer(threads=threads, **kwargs)
+    log.info("using required Rust watercolor renderer (%d threads)", threads)
     return renderer

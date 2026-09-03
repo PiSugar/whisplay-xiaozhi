@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, Mock
 
+import config
 from application import Application
 
 
@@ -27,6 +28,19 @@ class ApplicationListeningStateTests(unittest.IsolatedAsyncioTestCase):
             status="Listening...", emoji="🎤", text=""
         )
         self.assertEqual(app.state, app.LISTENING)
+
+    async def test_speaker_write_drives_watercolor_and_echo_reference(self):
+        app = object.__new__(Application)
+        app._barge_in = Mock()
+        app.display = Mock()
+        pcm = b"\x01\x00" * 32
+
+        app._on_speaker_pcm_written(pcm)
+
+        app._barge_in.update_speaker.assert_called_once_with(pcm)
+        app.display.update_audio.assert_called_once_with(
+            pcm, config.AUDIO_OUTPUT_SAMPLE_RATE, "assistant"
+        )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Application version
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 
 def _get(key: str, default: str = "") -> str:
@@ -78,9 +78,12 @@ WATERCOLOR_RENDER_SCALE = max(
 )
 WATERCOLOR_SMOOTH_FBM = _bool("WATERCOLOR_SMOOTH_FBM", "false")
 WATERCOLOR_TEMPORAL_3D = _bool("WATERCOLOR_TEMPORAL_3D", "false")
-WATERCOLOR_BACKEND = _get("WATERCOLOR_BACKEND", "auto").lower()
-if WATERCOLOR_BACKEND not in ("auto", "rust", "python"):
-    WATERCOLOR_BACKEND = "auto"
+WATERCOLOR_AUDIO_REACTIVITY = max(
+    0.5, min(5.0, _float("WATERCOLOR_AUDIO_REACTIVITY", "3.6"))
+)
+WATERCOLOR_SPEECH_MOTION = max(
+    0.5, min(5.0, _float("WATERCOLOR_SPEECH_MOTION", "4.5"))
+)
 WATERCOLOR_THREADS = max(1, min(4, _int("WATERCOLOR_THREADS", "2")))
 WATERCOLOR_CAPTION_PAGE_SECONDS = max(
     0.5, min(10.0, _float("WATERCOLOR_CAPTION_PAGE_SECONDS", "3.0"))
