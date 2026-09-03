@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Application version
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.2.0"
 
 
 def _get(key: str, default: str = "") -> str:
@@ -51,6 +51,13 @@ AUDIO_OUTPUT_SAMPLE_RATE = _int("AUDIO_OUTPUT_SAMPLE_RATE", "24000")
 AUDIO_OUTPUT_TAIL_PADDING_MS = _int("AUDIO_OUTPUT_TAIL_PADDING_MS", "120")
 AUDIO_OUTPUT_DRAIN_TIMEOUT_SEC = _float("AUDIO_OUTPUT_DRAIN_TIMEOUT_SEC", "4")
 
+# Voice barge-in while assistant TTS is playing. Disabled by default because
+# acoustic echo varies between enclosures; tune the RMS threshold if enabled.
+BARGE_IN_ENABLED = _bool("BARGE_IN_ENABLED", "false")
+BARGE_IN_MIN_RMS = max(100, _int("BARGE_IN_MIN_RMS", "850"))
+BARGE_IN_REQUIRED_FRAMES = max(1, min(10, _int("BARGE_IN_REQUIRED_FRAMES", "4")))
+BARGE_IN_WARMUP_MS = max(0, min(2000, _int("BARGE_IN_WARMUP_MS", "350")))
+
 # Wake word
 WAKE_WORD_ENABLED = _bool("WAKE_WORD_ENABLED", "false")
 WAKE_WORDS = [w.strip() for w in _get("WAKE_WORDS", "hey_jarvis").split(",") if w.strip()]
@@ -61,6 +68,29 @@ WAKE_WORD_COOLDOWN_SEC = _float("WAKE_WORD_COOLDOWN_SEC", "1.5")
 LCD_BRIGHTNESS = _int("LCD_BRIGHTNESS", "100")
 FONT_PATH = _get("FONT_PATH")
 DISPLAY_SCROLL_SPEED = _float("DISPLAY_SCROLL_SPEED", "1.0")
+DISPLAY_UI_STYLE = _get("DISPLAY_UI_STYLE", "classic").lower()
+if DISPLAY_UI_STYLE not in ("classic", "watercolor"):
+    DISPLAY_UI_STYLE = "classic"
+WATERCOLOR_FPS = max(1, min(20, _int("WATERCOLOR_FPS", "8")))
+WATERCOLOR_DIAMETER = max(100, min(220, _int("WATERCOLOR_DIAMETER", "168")))
+WATERCOLOR_RENDER_SCALE = max(
+    0.2, min(1.0, _float("WATERCOLOR_RENDER_SCALE", "0.37"))
+)
+WATERCOLOR_SMOOTH_FBM = _bool("WATERCOLOR_SMOOTH_FBM", "false")
+WATERCOLOR_TEMPORAL_3D = _bool("WATERCOLOR_TEMPORAL_3D", "false")
+WATERCOLOR_BACKEND = _get("WATERCOLOR_BACKEND", "auto").lower()
+if WATERCOLOR_BACKEND not in ("auto", "rust", "python"):
+    WATERCOLOR_BACKEND = "auto"
+WATERCOLOR_THREADS = max(1, min(4, _int("WATERCOLOR_THREADS", "2")))
+WATERCOLOR_CAPTION_PAGE_SECONDS = max(
+    0.5, min(10.0, _float("WATERCOLOR_CAPTION_PAGE_SECONDS", "3.0"))
+)
+WATERCOLOR_CAPTION_FONT_SIZE = max(
+    10, min(24, _int("WATERCOLOR_CAPTION_FONT_SIZE", "15"))
+)
+WATERCOLOR_CAPTION_OFFSET_X = max(
+    -20, min(20, _int("WATERCOLOR_CAPTION_OFFSET_X", "3"))
+)
 
 # Battery
 PISUGAR_ENABLED = _bool("PISUGAR_ENABLED", "true")

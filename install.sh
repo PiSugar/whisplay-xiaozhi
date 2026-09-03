@@ -75,6 +75,14 @@ pip install --upgrade pip
 pip install -r requirements.txt
 pip install gpiod
 
+if command_exists cargo; then
+    echo "=== Building optional Rust watercolor renderer ==="
+    bash tools/build_watercolor_rust.sh || \
+        echo "Rust watercolor build failed; Python fallback remains available"
+else
+    echo "cargo not found; watercolor UI will use the Python fallback"
+fi
+
 echo "=== Ensuring gpiod runtime is available ==="
 if ! python3 -c "import gpiod" >/dev/null 2>&1; then
     echo "System python missing gpiod, trying apt package..."

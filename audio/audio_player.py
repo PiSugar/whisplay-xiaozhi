@@ -8,6 +8,7 @@ Uses a queue-based approach so callers can push decoded PCM chunks asynchronousl
 import asyncio
 import logging
 import subprocess
+from collections.abc import Callable
 
 import config
 
@@ -22,6 +23,7 @@ class AudioPlayer:
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._stopping = False
+        self.on_pcm_written: Callable[[bytes], None] | None = None
 
     def start(self):
         """Start sox playback subprocess and writer task."""
@@ -70,6 +72,8 @@ class AudioPlayer:
                 break
             if self._process and self._process.stdin:
                 try:
+                    if self.on_pcm_written:
+                        self.on_pcm_written(chunk)
                     await loop.run_in_executor(None, self._process.stdin.write, chunk)
                     await loop.run_in_executor(None, self._process.stdin.flush)
                 except Exception:
@@ -98,6 +102,10 @@ class AudioPlayer:
                 await asyncio.wait_for(self._task, timeout=3)
             except asyncio.TimeoutError:
                 self._task.cancel()
+            except asyncio.CancelledError:
+                # An immediate barge-in may abort playback while a graceful
+                # drain is waiting for the same writer task.
+                pass
             self._task = None
         if self._process:
             try:
@@ -117,6 +125,39 @@ class AudioPlayer:
                         pass
             self._process = None
         log.info("player stopped")
+
+    async def abort(self):
+        """Immediately discard queued speech and terminate playback."""
+        self._stopping = True
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._task = None
+        process = self._process
+        self._process = None
+        if process:
+            try:
+                if process.stdin:
+                    process.stdin.close()
+            except Exception:
+                pass
+            try:
+                process.terminate()
+                await asyncio.wait_for(
+                    asyncio.get_running_loop().run_in_executor(None, process.wait),
+                    timeout=0.5,
+                )
+            except Exception:
+                try:
+                    process.kill()
+                    process.wait(timeout=0.5)
+                except Exception:
+                    pass
+        self._queue = asyncio.Queue()
+        log.info("player aborted")
 
     def _tail_padding(self) -> bytes:
         """Return a short silence pad so ALSA/sox drains audible speech tails."""

@@ -32,6 +32,7 @@ from display.ui_renderer import UIRenderer
 from audio.audio_codec import OpusEncoder, OpusDecoder
 from audio.audio_recorder import AudioRecorder
 from audio.audio_player import AudioPlayer
+from audio.barge_in import BargeInDetector
 from protocol.websocket_client import XiaoZhiClient
 from protocol.mqtt_client import XiaoZhiMqttClient
 from protocol.mcp_handler import McpHandler
@@ -92,6 +93,12 @@ class Application:
         # Audio
         self.recorder = AudioRecorder()
         self.player = AudioPlayer()
+        self._barge_in = BargeInDetector(
+            min_rms=config.BARGE_IN_MIN_RMS,
+            required_frames=config.BARGE_IN_REQUIRED_FRAMES,
+            warmup_ms=config.BARGE_IN_WARMUP_MS,
+        )
+        self.player.on_pcm_written = self._barge_in.update_speaker
         self.encoder = OpusEncoder(frame_duration_ms=60)
         self.decoder = OpusDecoder(frame_duration_ms=60)
 
@@ -166,6 +173,7 @@ class Application:
             self._state = new_state
             if self.led:
                 self.led.set_state(new_state)
+            self._update_display(activity=new_state)
 
     # ==================== Lifecycle ====================
     async def start(self):
@@ -186,6 +194,7 @@ class Application:
         if self.board:
             self.display = UIRenderer(self.board, font_path=config.FONT_PATH)
             self.display.start()
+            self.display.update(activity=self._state)
             self.board.set_backlight(config.LCD_BRIGHTNESS)
 
         # Setup button callbacks
@@ -468,7 +477,7 @@ class Application:
         """Server sent goodbye — session ended gracefully. Don't reconnect."""
         log.info("goodbye received, ending conversation")
         self._keep_listening = False
-        self.recorder.stop()
+        await self._stop_listening()
         await self.player.stop()
         self._set_state(self.IDLE)
         self._update_display(status="Connected", emoji="😄", text="Press button to wake...")
@@ -494,6 +503,7 @@ class Application:
                 self._tts_audio_frames,
             )
             self._keep_listening = False
+            await self._stop_listening()
             await self.player.stop()
             self._set_state(self.IDLE)
             self._update_display(status="Connected", emoji="\U0001f604", text="Press button to wake...")
@@ -507,6 +517,7 @@ class Application:
                 self._tts_audio_frames,
             )
             self._keep_listening = False
+            await self._stop_listening()
             await self.player.stop()
             self._set_state(self.IDLE)
             self._update_display(status="Connected", emoji="\U0001f604", text="Press button to wake...")
@@ -540,7 +551,7 @@ class Application:
         self._listen_after_connect = resume_listening
         try:
             log.warning("disconnected from server, reconnecting...")
-            self.recorder.stop()
+            await self._stop_listening()
             await self.player.stop()
             if not silent:
                 self._set_state(self.IDLE)
@@ -584,11 +595,17 @@ class Application:
 
         if self._state == self.SPEAKING:
             # Abort current TTS and start new listen
-            self._keep_listening = False
+            await self.player.abort()
+            await self._stop_listening()
+            self._keep_listening = True
+            # Change local state before sending abort so a prompt late
+            # tts/stop cannot tear down the new listening turn.
+            self._set_state(self.LISTENING)
             await self.client.send_abort()
-            await self.player.stop()
+            await self._start_listening()
+            return
 
-        if self._state in (self.IDLE, self.SPEAKING):
+        if self._state == self.IDLE:
             self._keep_listening = True  # Enable auto-listen cycle
             await self._start_listening()
 
@@ -600,7 +617,10 @@ class Application:
             self._set_state(self.IDLE)
             return
         self._set_state(self.LISTENING)
-        self._update_display(status="Listening...", emoji="🎤")
+        # Clear the idle call-to-action as soon as capture starts. Watercolor
+        # captions prefer text over status, so leaving the old text in place
+        # makes an active listener misleadingly say "Press button to wake...".
+        self._update_display(status="Listening...", emoji="🎤", text="")
         self._tts_text_buffer = ""
 
         try:
@@ -641,12 +661,67 @@ class Application:
             async for pcm_frame in self.recorder.read_frames(self.encoder.frame_bytes):
                 if self._state != self.LISTENING:
                     break
+                if self.display:
+                    self.display.update_audio(
+                        pcm_frame, config.AUDIO_INPUT_SAMPLE_RATE, "user"
+                    )
                 opus_data = self.encoder.encode(pcm_frame)
                 await self.client.send_audio(opus_data)
         except asyncio.CancelledError:
             pass
         except Exception as e:
             log.error("audio streaming error: %s", e)
+
+    async def _monitor_barge_in(self):
+        """Capture during TTS and switch the same stream to listening on speech."""
+        interrupted = False
+        try:
+            async for pcm_frame in self.recorder.read_frames(self.encoder.frame_bytes):
+                if interrupted:
+                    if self._state != self.LISTENING:
+                        break
+                    if self.display:
+                        self.display.update_audio(
+                            pcm_frame, config.AUDIO_INPUT_SAMPLE_RATE, "user"
+                        )
+                    await self.client.send_audio(self.encoder.encode(pcm_frame))
+                    continue
+                if self._state != self.SPEAKING:
+                    break
+                buffered = self._barge_in.process(pcm_frame)
+                if buffered is None:
+                    continue
+                interrupted = await self._begin_voice_barge_in(buffered)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log.error("barge-in capture error: %s", e)
+
+    async def _begin_voice_barge_in(self, buffered_frames: list[bytes]) -> bool:
+        if self._state != self.SPEAKING or not self.client or not self.client.connected:
+            return False
+        log.info("voice barge-in detected")
+        await self.player.abort()
+        self._keep_listening = True
+        self._set_state(self.LISTENING)
+        self._update_display(status="Listening...", emoji="🎤", text="")
+        try:
+            # State changes first so the server's late tts/stop is ignored.
+            await self.client.send_abort()
+            await self.client.send_listen_start(mode="auto")
+            for pcm_frame in buffered_frames:
+                if self.display:
+                    self.display.update_audio(
+                        pcm_frame, config.AUDIO_INPUT_SAMPLE_RATE, "user"
+                    )
+                await self.client.send_audio(self.encoder.encode(pcm_frame))
+            return True
+        except Exception as e:
+            log.warning("voice barge-in listen start failed: %s", e)
+            self._keep_listening = False
+            self._set_state(self.IDLE)
+            self.recorder.stop()
+            return False
 
     # ==================== Server Event Callbacks ====================
     async def _on_listen_stop(self):
@@ -683,18 +758,30 @@ class Application:
         self._set_state(self.SPEAKING)
         self._update_display(status="Speaking...")
         self.player.start()
+        if config.BARGE_IN_ENABLED:
+            self._barge_in.reset()
+            self.recorder.start()
+            self._recording_task = asyncio.create_task(self._monitor_barge_in())
 
     async def _on_tts_audio(self, opus_data: bytes):
         """Received Opus TTS audio frame."""
+        if self._state != self.SPEAKING:
+            return
         try:
             pcm = self.decoder.decode(opus_data)
             self._tts_audio_frames += 1
+            if self.display:
+                self.display.update_audio(
+                    pcm, config.AUDIO_OUTPUT_SAMPLE_RATE, "assistant"
+                )
             await self.player.put(pcm)
         except Exception as e:
             log.error("decode error: %s", e)
 
     async def _on_tts_sentence_start(self, text: str):
         """New TTS sentence starting."""
+        if self._state != self.SPEAKING:
+            return
         self._tts_text_buffer = self._append_tts_text(self._tts_text_buffer, text)
         self._update_display(text=self._tts_text_buffer)
 
@@ -718,8 +805,17 @@ class Application:
 
     async def _on_tts_stop(self):
         """TTS playback finished. Auto-restart listening if in conversation."""
+        if self._state != self.SPEAKING:
+            log.info("ignored late TTS stop while %s", self._state)
+            return
         log.info("TTS stop received after %d audio frames", self._tts_audio_frames)
+        # Keep capture alive while queued/ALSA audio drains so the user can
+        # still interrupt the audible tail after the network TTS stop event.
         await self.player.stop()
+        if self._state != self.SPEAKING:
+            return
+        if config.BARGE_IN_ENABLED:
+            await self._stop_listening()
         if self._keep_listening and self.client and self.client.connected:
             await self._start_listening()
         else:
@@ -866,8 +962,13 @@ class Application:
         if not self.client or not self.client.connected:
             return
         if self._state == self.SPEAKING:
+            await self.player.abort()
+            await self._stop_listening()
+            self._keep_listening = True
+            self._set_state(self.LISTENING)
             await self.client.send_abort()
-            await self.player.stop()
-        if self._state in (self.IDLE, self.SPEAKING):
+            await self._start_listening()
+            return
+        if self._state == self.IDLE:
             self._keep_listening = True
             await self._start_listening()

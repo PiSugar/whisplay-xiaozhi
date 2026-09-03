@@ -13,7 +13,8 @@
 - **WebSocket 语音对话** — 实现小智协议 v1，Opus 音频编解码
 - **自动配对** — 设备在 LCD 上显示验证码，在 xiaozhi.me 输入即可绑定（无需手动填写 Token）
 - **按键唤醒** — 按下按键唤醒设备并开始自动聆听（服务端 VAD 控制语音结束）
-- **LCD 显示** — 240×280 ST7789V，显示状态、表情、滚动文字、Wi-Fi 信号和电量
+- **可选语音打断** — 检测到持续讲话时停止 TTS，并立即开始新一轮聆听
+- **可配置 LCD UI** — 可选择经典状态/表情界面，或从 `whisplay-chatgpt` 移植的音频响应式水彩球
 - **RGB LED** — 根据状态自动变色（空闲/聆听/思考/回答/错误）
 - **电池监测** — PiSugar 电池电量实时显示
 - **兼容 whisplay-daemon** — 检测到 daemon 时自动切换到 daemon 提供的 framebuffer / 按键 / LED
@@ -113,16 +114,55 @@ whisplay-xiaozhi/
 
 ## 配置说明
 
+在 `.env` 中设置 `DISPLAY_UI_STYLE=watercolor` 并重启应用即可启用水彩球。
+聆听时麦克风音量会扩张球体轮廓，助手说话时 TTS 音频会驱动内部颜料流动。
+
+设置 `BARGE_IN_ENABLED=true` 可启用语音打断。如果扬声器回声导致误触发，
+请提高 `BARGE_IN_MIN_RMS`。
+
+### Rust 水彩球渲染器
+
+`WATERCOLOR_BACKEND=auto` 会优先使用原生渲染器，扩展不存在时安全回退到
+Python。工程已包含在 CM5 上编译、并在 Zero 2 W 上验证过的 Linux AArch64
+预编译扩展：`rust/watercolor_renderer/prebuilt/linux-aarch64/_watercolor_rust.so`。
+程序会优先加载 `display/` 中的部署版本，找不到时直接加载该归档版本。
+
+需要重新构建时，请在安装了 Rust 的 AArch64 设备上执行（CM5 即可）：
+
+```bash
+bash tools/build_watercolor_rust.sh
+```
+
+脚本会将产物归档到上述 `prebuilt/linux-aarch64` 目录，并复制一份到
+`display/_watercolor_rust.so` 供当前环境使用。Zero 2 W 推荐设置
+`WATERCOLOR_THREADS=2`；四线程帧率更高，但留给音频和网络的 CPU 余量更少。
+部署验证时可设置 `WATERCOLOR_BACKEND=rust`，让扩展缺失直接报错而不回退。
+
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `XIAOZHI_OTA_URL` | OTA / 激活 API 地址 | `https://api.tenclass.net/xiaozhi/ota/` |
 | `XIAOZHI_DEVICE_ID` | 设备ID（留空自动获取MAC） | — |
 | `ALSA_INPUT_DEVICE` | ALSA 录音设备 | `default` |
 | `ALSA_OUTPUT_DEVICE` | ALSA 播放设备 | `default` |
+| `BARGE_IN_ENABLED` | 允许语音打断助手 TTS | `false` |
+| `BARGE_IN_MIN_RMS` | 触发打断所需的最低原始 PCM RMS | `850` |
+| `BARGE_IN_REQUIRED_FRAMES` | 连续语音帧数量，每帧 60 ms | `4` |
+| `BARGE_IN_WARMUP_MS` | 每次回答开始时的回声学习时长 | `350` |
 | `WAKE_WORD_ENABLED` | 启用唤醒词 | `false` |
 | `WAKE_WORDS` | 唤醒词列表（逗号分隔） | `hey_jarvis` |
 | `LCD_BRIGHTNESS` | LCD 亮度 (0-100) | `100` |
 | `DISPLAY_SCROLL_SPEED` | 文字每帧滚动像素数 | `1.0` |
+| `DISPLAY_UI_STYLE` | LCD 界面：`classic` 或 `watercolor` | `classic` |
+| `WATERCOLOR_FPS` | 水彩球动画帧率（1-20） | `8` |
+| `WATERCOLOR_DIAMETER` | 水彩球直径像素（100-220） | `168` |
+| `WATERCOLOR_RENDER_SCALE` | 内部渲染比例，越低越省性能（0.2-1.0） | `0.37` |
+| `WATERCOLOR_SMOOTH_FBM` | 在高性能设备上启用平滑 FBM 采样 | `false` |
+| `WATERCOLOR_TEMPORAL_3D` | 启用更高质量的时域噪声 | `false` |
+| `WATERCOLOR_BACKEND` | 渲染后端：`auto`、`rust` 或 `python` | `auto` |
+| `WATERCOLOR_THREADS` | 原生渲染器工作线程数（1-4） | `2` |
+| `WATERCOLOR_CAPTION_PAGE_SECONDS` | 每页字幕的最短显示秒数 | `3.0` |
+| `WATERCOLOR_CAPTION_FONT_SIZE` | 水彩球字幕字号（10-24 像素） | `15` |
+| `WATERCOLOR_CAPTION_OFFSET_X` | 水彩球字幕水平偏移（-20 到 20，正值向右） | `3` |
 | `PISUGAR_ENABLED` | 启用电池监测 | `true` |
 | `XIAOZHI_LOCAL_COMMAND_TOOL_ENABLED` | 向小智暴露 `local_command` MCP 工具 | `true` |
 | `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` | `local_command` 允许执行的命令名，逗号分隔 | `date,uptime,hostname,whoami,df,free,ip,iwgetid,vcgencmd` |

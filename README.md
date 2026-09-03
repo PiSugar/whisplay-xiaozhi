@@ -13,7 +13,8 @@ Connects to the [XiaoZhi AI platform](https://xiaozhi.me) via WebSocket, providi
 - **WebSocket Voice Conversation** — XiaoZhi protocol v1 with Opus audio codec
 - **Auto Pairing** — Device shows a verification code on LCD; enter it on xiaozhi.me to bind (no token needed)
 - **Push-to-Wake** — Button press wakes the device and starts auto-listening (server-side VAD controls when speech ends)
-- **LCD Display** — 240×280 ST7789V showing status, emoji, scrolling text, Wi-Fi signal, and battery level
+- **Optional Voice Barge-In** — sustained speech can interrupt TTS and immediately start a new turn
+- **Configurable LCD UI** — classic status/emoji view or the audio-reactive watercolor orb ported from `whisplay-chatgpt`
 - **RGB LED** — Automatic color changes based on state (idle / listening / thinking / speaking / error)
 - **Battery Monitor** — Real-time PiSugar battery level display
 - **whisplay-daemon Ready** — Auto-adapts to daemon framebuffer / button / LED mode when available
@@ -113,16 +114,59 @@ whisplay-xiaozhi/
 
 ## Configuration
 
+Set `DISPLAY_UI_STYLE=watercolor` in `.env` and restart the app to enable the
+watercolor orb. Listening expands the orb with microphone energy; assistant
+speech animates its internal pigment flow.
+
+Set `BARGE_IN_ENABLED=true` to allow sustained speech to interrupt assistant
+playback. If speaker echo causes false triggers, raise `BARGE_IN_MIN_RMS`.
+
+### Rust watercolor renderer
+
+`WATERCOLOR_BACKEND=auto` prefers the native renderer and safely falls back to
+Python when the extension is absent. The repository includes the Linux AArch64
+extension built on a CM5 and validated on a Zero 2 W at
+`rust/watercolor_renderer/prebuilt/linux-aarch64/_watercolor_rust.so`. The app
+loads the deployed copy under `display/` first, then this archived build.
+
+To rebuild it, use an AArch64 machine with Rust installed (a CM5 is suitable):
+
+```bash
+bash tools/build_watercolor_rust.sh
+```
+
+The script archives the output under `prebuilt/linux-aarch64` and also copies it
+to `display/_watercolor_rust.so` for the current environment. For a Zero 2 W,
+the recommended setting is `WATERCOLOR_THREADS=2`; four threads maximize FPS
+but leave less CPU headroom for audio and networking. Use
+`WATERCOLOR_BACKEND=rust` to fail fast instead of falling back when validating
+a deployment.
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `XIAOZHI_OTA_URL` | OTA / activation API URL | `https://api.tenclass.net/xiaozhi/ota/` |
 | `XIAOZHI_DEVICE_ID` | Device ID (auto-detect MAC) | — |
 | `ALSA_INPUT_DEVICE` | ALSA recording device | `default` |
 | `ALSA_OUTPUT_DEVICE` | ALSA playback device | `default` |
+| `BARGE_IN_ENABLED` | Allow voice to interrupt assistant TTS | `false` |
+| `BARGE_IN_MIN_RMS` | Minimum raw PCM RMS needed for interruption | `850` |
+| `BARGE_IN_REQUIRED_FRAMES` | Consecutive 60 ms speech frames required | `4` |
+| `BARGE_IN_WARMUP_MS` | Initial echo-learning period for each reply | `350` |
 | `WAKE_WORD_ENABLED` | Enable wake word | `false` |
 | `WAKE_WORDS` | Wake words (comma-separated) | `hey_jarvis` |
 | `LCD_BRIGHTNESS` | LCD brightness (0-100) | `100` |
 | `DISPLAY_SCROLL_SPEED` | Text scroll pixels per rendered frame | `1.0` |
+| `DISPLAY_UI_STYLE` | LCD UI: `classic` or `watercolor` | `classic` |
+| `WATERCOLOR_FPS` | Watercolor animation FPS (1-20) | `8` |
+| `WATERCOLOR_DIAMETER` | Orb diameter in pixels (100-220) | `168` |
+| `WATERCOLOR_RENDER_SCALE` | Internal render scale; lower is faster (0.2-1.0) | `0.37` |
+| `WATERCOLOR_SMOOTH_FBM` | Enable smoother FBM sampling on faster boards | `false` |
+| `WATERCOLOR_TEMPORAL_3D` | Enable higher-quality temporal noise | `false` |
+| `WATERCOLOR_BACKEND` | Renderer: `auto`, `rust`, or `python` | `auto` |
+| `WATERCOLOR_THREADS` | Native renderer worker threads (1-4) | `2` |
+| `WATERCOLOR_CAPTION_PAGE_SECONDS` | Minimum seconds to show each caption page | `3.0` |
+| `WATERCOLOR_CAPTION_FONT_SIZE` | Watercolor caption font size in pixels (10-24) | `15` |
+| `WATERCOLOR_CAPTION_OFFSET_X` | Horizontal caption offset in pixels (-20 to 20) | `3` |
 | `PISUGAR_ENABLED` | Enable battery monitor | `true` |
 | `XIAOZHI_LOCAL_COMMAND_TOOL_ENABLED` | Expose the `local_command` MCP tool | `true` |
 | `XIAOZHI_LOCAL_COMMAND_ALLOWLIST` | Comma-separated executable names allowed by `local_command` | `date,uptime,hostname,whoami,df,free,ip,iwgetid,vcgencmd` |
