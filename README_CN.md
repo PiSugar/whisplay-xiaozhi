@@ -114,8 +114,31 @@ whisplay-xiaozhi/
 
 ## 配置说明
 
-在 `.env` 中设置 `DISPLAY_UI_STYLE=watercolor` 并重启应用即可启用水彩球。
-聆听时麦克风音量会扩张球体轮廓，助手说话时 TTS 音频会驱动内部颜料流动。
+### 开启水彩球
+
+<p align="center">
+  <img src="assets/watercolor-orb.gif" alt="在 Raspberry Pi Zero 2 W 上渲染的音频响应式水彩球" width="176">
+</p>
+
+如果还没有 `.env`，先复制配置模板，然后启用水彩界面。以下是经过 Zero 2 W
+及更新树莓派验证的高画质配置：
+
+```bash
+cp -n .env.template .env
+```
+
+```dotenv
+DISPLAY_UI_STYLE=watercolor
+WATERCOLOR_FPS=8
+WATERCOLOR_RENDER_SCALE=0.60
+WATERCOLOR_SMOOTH_FBM=true
+WATERCOLOR_TEMPORAL_3D=true
+WATERCOLOR_THREADS=2
+```
+
+使用独立 systemd 服务时重启 `whisplay-xiaozhi@pi`；通过
+`whisplay-daemon` 运行时，从应用菜单退出并重新启动小智。聆听时麦克风音量会
+扩张球体轮廓，助手说话时 TTS 音频会驱动内部颜料流动。
 
 设置 `BARGE_IN_ENABLED=true` 可启用语音打断。如果扬声器回声导致误触发，
 请提高 `BARGE_IN_MIN_RMS`。

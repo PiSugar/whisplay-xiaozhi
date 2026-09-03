@@ -114,9 +114,33 @@ whisplay-xiaozhi/
 
 ## Configuration
 
-Set `DISPLAY_UI_STYLE=watercolor` in `.env` and restart the app to enable the
-watercolor orb. Listening expands the orb with microphone energy; assistant
-speech animates its internal pigment flow.
+### Enable the watercolor orb
+
+<p align="center">
+  <img src="assets/watercolor-orb.gif" alt="Audio-reactive watercolor orb rendered on Raspberry Pi Zero 2 W" width="176">
+</p>
+
+Copy the configuration template if `.env` does not exist, then enable the
+watercolor UI. The following settings are the tested high-quality profile for
+Zero 2 W and newer Raspberry Pi models:
+
+```bash
+cp -n .env.template .env
+```
+
+```dotenv
+DISPLAY_UI_STYLE=watercolor
+WATERCOLOR_FPS=8
+WATERCOLOR_RENDER_SCALE=0.60
+WATERCOLOR_SMOOTH_FBM=true
+WATERCOLOR_TEMPORAL_3D=true
+WATERCOLOR_THREADS=2
+```
+
+Restart `whisplay-xiaozhi@pi` when using the standalone systemd service, or
+exit and relaunch XiaoZhi from the Whisplay app menu when using
+`whisplay-daemon`. Listening expands the orb with microphone energy; assistant
+speech drives its internal pigment flow.
 
 Set `BARGE_IN_ENABLED=true` to allow sustained speech to interrupt assistant
 playback. If speaker echo causes false triggers, raise `BARGE_IN_MIN_RMS`.
