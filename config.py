@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Application version
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 
 def _get(key: str, default: str = "") -> str:
