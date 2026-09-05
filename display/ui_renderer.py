@@ -37,6 +37,7 @@ _WIFI_LEVEL_ICONS = {
     3: "wifi-strong.png",
 }
 _STATUS_ICON_HEIGHT = 15
+_WATERCOLOR_STATUS_OVERLAY_HEIGHT = 40
 _NETWORK_ICON_CENTER_SCALE = 1.4
 _HEADER_TOP_Y = 8
 _WIFI_EXTRA_UP_PX = 1
@@ -154,6 +155,10 @@ class UIRenderer(threading.Thread):
         self._line_height = 0
         self._wifi_source_icon_cache: dict[str, Image.Image | None] = {}
         self._wifi_scaled_icon_cache: dict[tuple[str, int, float], Image.Image | None] = {}
+        self._watercolor_status_overlay_cache: dict[
+            tuple,
+            tuple[int, int, int, int, np.ndarray, np.ndarray] | None,
+        ] = {}
 
         if resolved:
             self._text_font = ImageFont.truetype(resolved, 20)
@@ -345,6 +350,7 @@ class UIRenderer(threading.Thread):
             visual_scale=visual_scale,
             caption_text=caption,
         )
+        frame = self._composite_watercolor_status_icons(frame, snap)
         self.board.draw_image(
             0,
             0,
@@ -352,6 +358,73 @@ class UIRenderer(threading.Thread):
             self.board.LCD_HEIGHT,
             frame,
         )
+
+    def _composite_watercolor_status_icons(self, frame: bytes, snap: dict) -> bytes:
+        """Alpha-composite the compact status group over native RGB565."""
+        width = self.board.LCD_WIDTH
+        height = self.board.LCD_HEIGHT
+        overlay_height = min(height, _WATERCOLOR_STATUS_OVERLAY_HEIGHT)
+        key = (
+            width,
+            overlay_height,
+            snap.get("battery_level", -1),
+            tuple(snap.get("battery_color", (128, 128, 128))),
+            snap.get("wifi_signal_level", 0),
+        )
+        missing = object()
+        cached = self._watercolor_status_overlay_cache.get(key, missing)
+        if cached is missing:
+            image = Image.new("RGBA", (width, overlay_height), (0, 0, 0, 0))
+            self._draw_status_icons(ImageDraw.Draw(image), snap, width)
+            overlay = np.asarray(image, dtype=np.uint8).copy()
+            visible_y, visible_x = np.where(overlay[..., 3] > 0)
+            if visible_x.size:
+                x0 = int(visible_x.min())
+                x1 = int(visible_x.max()) + 1
+                y0 = int(visible_y.min())
+                y1 = int(visible_y.max()) + 1
+                crop = overlay[y0:y1, x0:x1]
+                cached = (
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    crop[..., :3].astype(np.uint16),
+                    crop[..., 3:4].astype(np.uint16),
+                )
+            else:
+                cached = None
+            if len(self._watercolor_status_overlay_cache) >= 12:
+                self._watercolor_status_overlay_cache.clear()
+            self._watercolor_status_overlay_cache[key] = cached
+
+        if cached is None:
+            return frame
+        expected_size = width * height * 2
+        if len(frame) != expected_size:
+            raise ValueError(
+                f"watercolor RGB565 frame has {len(frame)} bytes, expected {expected_size}"
+            )
+
+        x0, y0, x1, y1, foreground, alpha = cached
+        packed = np.frombuffer(frame, dtype=">u2").reshape(height, width)
+        region = packed[y0:y1, x0:x1].astype(np.uint16)
+        base = np.empty((*region.shape, 3), dtype=np.uint16)
+        base[..., 0] = ((region >> 11) & 0x1F) * 255 // 31
+        base[..., 1] = ((region >> 5) & 0x3F) * 255 // 63
+        base[..., 2] = (region & 0x1F) * 255 // 31
+        mixed = (base * (255 - alpha) + foreground * alpha + 127) // 255
+        result = (
+            ((mixed[..., 0] >> 3) << 11)
+            | ((mixed[..., 1] >> 2) << 5)
+            | (mixed[..., 2] >> 3)
+        ).astype(">u2")
+        output = bytearray(frame)
+        row_bytes = (x1 - x0) * 2
+        for row, pixels in enumerate(result):
+            offset = ((y0 + row) * width + x0) * 2
+            output[offset : offset + row_bytes] = pixels.tobytes()
+        return bytes(output)
 
     def _select_watercolor_caption(self, snap: dict, now: float) -> str:
         """Advance speaking captions page by page without skipping new text."""

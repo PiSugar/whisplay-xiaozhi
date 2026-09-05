@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+from PIL import ImageFont
 
 from display.watercolor_orb import OrbRenderer
 
@@ -31,6 +32,29 @@ class _FakeBoard:
 
 
 class WatercolorOrbTests(unittest.TestCase):
+    def test_watercolor_composites_battery_and_wifi_in_top_right(self):
+        ui = object.__new__(UIRenderer)
+        ui.board = _FakeBoard()
+        ui._battery_font = ImageFont.load_default()
+        ui._wifi_source_icon_cache = {}
+        ui._wifi_scaled_icon_cache = {}
+        ui._watercolor_status_overlay_cache = {}
+        frame = bytes(ui.board.LCD_WIDTH * ui.board.LCD_HEIGHT * 2)
+        snap = {
+            "battery_level": 72,
+            "battery_color": (255, 255, 255),
+            "wifi_signal_level": 3,
+        }
+
+        decorated = ui._composite_watercolor_status_icons(frame, snap)
+
+        self.assertEqual(len(decorated), len(frame))
+        pixels = np.frombuffer(decorated, dtype=">u2").reshape(
+            ui.board.LCD_HEIGHT, ui.board.LCD_WIDTH
+        )
+        self.assertTrue(np.any(pixels[:40, 120:] != 0))
+        self.assertFalse(np.any(pixels[:40, :120] != 0))
+
     def test_watercolor_requires_native_renderer(self):
         with (
             patch("display.watercolor_backend.NativeOrbRenderer", None),

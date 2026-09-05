@@ -71,13 +71,9 @@ class BatteryMonitor:
                 pass
 
     def get_color(self) -> tuple[int, int, int]:
-        """Return RGB color tuple based on battery level."""
+        """Use a white fill normally and green only while charging."""
         if self.level < 0:
             return (128, 128, 128)
         if self.charging:
-            return (0, 200, 255)
-        if self.level <= 10:
-            return (255, 0, 0)
-        if self.level <= 30:
-            return (255, 165, 0)
-        return (52, 211, 81)
+            return (52, 211, 81)
+        return (255, 255, 255)
