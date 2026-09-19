@@ -18,6 +18,7 @@ STATE_COLORS = {
     "thinking":    (128, 0,   255),
     "error":       (255, 0,   0),
     "wake_word":   (0,   200, 255),
+    "camera":      (0,   160, 255),
 }
 
 

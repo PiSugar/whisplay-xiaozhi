@@ -6,7 +6,12 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from protocol.camera_tool import capture_photo, configure_vision
+from protocol.camera_tool import (
+    analyze_selected_photo,
+    capture_photo,
+    configure_vision,
+    save_user_photo,
+)
 from protocol.mcp_handler import McpHandler, McpToolResult
 
 
@@ -85,6 +90,32 @@ class CameraToolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(json.loads(result), {"result": "a desk"})
 
+    async def test_button_photo_persists_and_can_be_analyzed_later(self):
+        shown_photos = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            jpeg_path = Path(temp_dir) / "source.jpg"
+            Image.new("RGB", (320, 240), "green").save(jpeg_path, "JPEG")
+            with patch("protocol.camera_tool.config.CAMERA_OUTPUT_DIR", temp_dir):
+                selected = save_user_photo(jpeg_path.read_bytes())
+            self.assertTrue(selected.name.startswith("user-photo-"))
+
+            with patch(
+                "protocol.camera_tool._upload_for_explanation",
+                return_value=json.dumps({"answer": "milk and apples"}),
+            ) as upload:
+                result = await analyze_selected_photo(
+                    {"question": "Add these items to my shopping list"},
+                    photo_callback=shown_photos.append,
+                )
+
+            payload = json.loads(result.content[0]["text"])
+            self.assertEqual(payload["answer"], "milk and apples")
+            self.assertEqual(payload["device_photo"]["source"], "user_button_capture")
+            self.assertTrue(payload["device_photo"]["persistent"])
+            self.assertEqual(payload["device_photo"]["path"], str(selected))
+            self.assertEqual(shown_photos, [str(selected)])
+            self.assertTrue(upload.call_args.args[0].startswith(b"\xff\xd8"))
+
     async def test_mcp_handler_preserves_image_blocks(self):
         handler = McpHandler()
         expected = [
@@ -105,6 +136,24 @@ class CameraToolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(rpc_id, "camera-1")
         self.assertEqual(response, {"content": expected})
+
+    async def test_mcp_description_can_mark_photo_as_next_input_attachment(self):
+        handler = McpHandler()
+        handler.register("photo", lambda _: "ok", description="normal")
+        handler.update_description("photo", "active attachment")
+
+        rpc_id, response = await handler.handle(
+            {
+                "payload": {
+                    "id": "tools-1",
+                    "method": "tools/list",
+                    "params": {},
+                }
+            }
+        )
+
+        self.assertEqual(rpc_id, "tools-1")
+        self.assertEqual(response["tools"][0]["description"], "active attachment")
 
 
 if __name__ == "__main__":

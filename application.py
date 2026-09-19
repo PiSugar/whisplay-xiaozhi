@@ -60,6 +60,11 @@ from protocol.web_tools import (
 from protocol.camera_tool import (
     CAMERA_CAPTURE_DESCRIPTION,
     CAMERA_CAPTURE_INPUT_SCHEMA,
+    PENDING_SELECTED_PHOTO_DESCRIPTION,
+    SELECTED_PHOTO_DESCRIPTION,
+    SELECTED_PHOTO_INPUT_SCHEMA,
+    CameraViewfinder,
+    analyze_selected_photo,
     capture_photo,
     configure_vision,
     is_enabled as camera_tool_is_enabled,
@@ -86,6 +91,7 @@ class Application:
     CONNECTING = "connecting"
     LISTENING = "listening"
     SPEAKING = "speaking"
+    CAMERA = "camera"
 
     def __init__(self):
         # Hardware
@@ -160,6 +166,12 @@ class Application:
                 description=CAMERA_CAPTURE_DESCRIPTION,
                 input_schema=CAMERA_CAPTURE_INPUT_SCHEMA,
             )
+            self.mcp.register(
+                "self.camera.analyze_selected_photo",
+                self._analyze_selected_photo_with_display,
+                description=SELECTED_PHOTO_DESCRIPTION,
+                input_schema=SELECTED_PHOTO_INPUT_SCHEMA,
+            )
 
         # State
         self._state = self.IDLE
@@ -176,6 +188,9 @@ class Application:
         self._last_late_ignorable_stt_at = 0.0
         self._terminal_clear_task: asyncio.Task | None = None
         self._terminal_shown_at: float | None = None
+        self._button_click_task: asyncio.Task | None = None
+        self._camera_viewfinder: CameraViewfinder | None = None
+        self._camera_capture_task: asyncio.Task | None = None
 
     @property
     def state(self) -> str:
@@ -252,6 +267,15 @@ class Application:
         if self._terminal_clear_task:
             self._terminal_clear_task.cancel()
             self._terminal_clear_task = None
+        if self._button_click_task:
+            self._button_click_task.cancel()
+            self._button_click_task = None
+        if self._camera_capture_task:
+            self._camera_capture_task.cancel()
+            self._camera_capture_task = None
+        if self._camera_viewfinder:
+            await self._camera_viewfinder.stop()
+            self._camera_viewfinder = None
 
         # Stop components
         self.recorder.stop()
@@ -580,10 +604,10 @@ class Application:
 
     # ==================== Button Events ====================
     def _on_button_press(self):
-        """Button pressed — wake: start auto-listen or abort TTS."""
+        """Button pressed — resolve a normal click or camera double-click."""
         if self._loop:
             self._loop.call_soon_threadsafe(
-                asyncio.ensure_future, self._handle_button_press()
+                asyncio.ensure_future, self._handle_button_click_event()
             )
 
     def _on_button_release(self):
@@ -599,6 +623,105 @@ class Application:
         """Daemon revoked foreground focus; exit app process."""
         log.info("focus revoked by daemon, shutting down")
         os.kill(os.getpid(), signal.SIGTERM)
+
+    async def _handle_button_click_event(self):
+        if self._camera_viewfinder is not None:
+            if self._camera_capture_task is None or self._camera_capture_task.done():
+                self._camera_capture_task = asyncio.create_task(self._capture_user_photo())
+            return
+
+        pending = self._button_click_task
+        if pending is not None and not pending.done():
+            pending.cancel()
+            self._button_click_task = None
+            await self._enter_camera_viewfinder()
+            return
+
+        self._button_click_task = asyncio.create_task(self._dispatch_single_button_click())
+
+    async def _dispatch_single_button_click(self):
+        current = asyncio.current_task()
+        try:
+            await asyncio.sleep(config.CAMERA_DOUBLE_CLICK_SECONDS)
+            await self._handle_button_press()
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._button_click_task is current:
+                self._button_click_task = None
+
+    async def _enter_camera_viewfinder(self):
+        if not camera_tool_is_enabled() or self._camera_viewfinder is not None:
+            return
+        self._keep_listening = False
+        if self._state == self.SPEAKING:
+            await self.player.abort()
+            await self._stop_listening()
+        elif self._state == self.LISTENING:
+            await self._stop_listening(notify_server=True)
+        if self.client and self.client.connected and self._state in (self.SPEAKING, self.LISTENING):
+            try:
+                await self.client.send_abort()
+            except Exception:
+                log.exception("failed to abort conversation before camera viewfinder")
+
+        self._set_state(self.CAMERA)
+        self._update_display(status="Camera", emoji="📷", text="Starting viewfinder...")
+        viewfinder = CameraViewfinder(frame_callback=self._show_camera_viewfinder_frame)
+        self._camera_viewfinder = viewfinder
+        try:
+            await viewfinder.start()
+        except Exception as exc:
+            self._camera_viewfinder = None
+            self._set_state(self.IDLE)
+            self._update_display(status="Camera error", emoji="❌", text=str(exc))
+            log.exception("failed to start camera viewfinder")
+
+    def _show_camera_viewfinder_frame(self, jpeg: bytes):
+        if self.display:
+            self.display.show_photo_bytes(jpeg, duration=2.0, caption="Press once to capture")
+
+    async def _capture_user_photo(self):
+        viewfinder = self._camera_viewfinder
+        if viewfinder is None:
+            return
+        self._update_display(status="Camera", emoji="📷", text="Capturing...")
+        try:
+            path = await viewfinder.capture()
+            self._camera_viewfinder = None
+            log.info("user captured photo: %s", path)
+            if self.display:
+                self.display.show_photo(
+                    str(path), duration=config.CAMERA_USER_PHOTO_PREVIEW_SECONDS
+                )
+            self._set_state(self.IDLE)
+            self._update_display(
+                status="Photo saved",
+                emoji="✅",
+                text="Photo attached. Tell Xiaozhi what to do with it.",
+            )
+            # The gateway caches MCP tool descriptions for each connection.
+            # Mark the photo as an active attachment, then establish a fresh
+            # session so the next utterance sees that context. Reconnecting also
+            # guarantees auto-listen after captures made from the dormant state.
+            self.mcp.update_description(
+                "self.camera.analyze_selected_photo",
+                PENDING_SELECTED_PHOTO_DESCRIPTION,
+            )
+            self._schedule_reconnect(silent=True, resume_listening=True)
+        except Exception as exc:
+            self._camera_viewfinder = None
+            try:
+                await viewfinder.stop()
+            except Exception:
+                pass
+            if self.display:
+                self.display.clear_photo()
+            self._set_state(self.IDLE)
+            self._update_display(status="Camera error", emoji="❌", text=str(exc))
+            log.exception("failed to capture user photo")
+        finally:
+            self._camera_capture_task = None
 
     async def _handle_button_press(self):
         # If disconnected, trigger reconnect and auto-listen after
@@ -954,6 +1077,24 @@ class Application:
                 progress_callback=self._update_terminal_progress,
                 photo_callback=self._show_camera_photo,
             )
+        finally:
+            self._schedule_terminal_clear()
+
+    async def _analyze_selected_photo_with_display(self, params: dict):
+        try:
+            result = await analyze_selected_photo(
+                params,
+                progress_callback=self._update_terminal_progress,
+                photo_callback=self._show_camera_photo,
+            )
+            # Consume the automatic attachment marker locally. The active
+            # gateway session retains its cached description for this turn;
+            # future sessions return to normal persistent-photo semantics.
+            self.mcp.update_description(
+                "self.camera.analyze_selected_photo",
+                SELECTED_PHOTO_DESCRIPTION,
+            )
+            return result
         finally:
             self._schedule_terminal_clear()
 

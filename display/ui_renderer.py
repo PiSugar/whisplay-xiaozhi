@@ -11,6 +11,7 @@ import time
 import threading
 import logging
 import math
+from io import BytesIO
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -202,6 +203,31 @@ class UIRenderer(threading.Thread):
         """Temporarily show a captured photo without blocking the render thread."""
         with Image.open(image_path) as source:
             image = source.convert("RGB")
+        self._show_photo_image(image, duration=duration)
+
+    def show_photo_bytes(
+        self,
+        jpeg: bytes,
+        duration: float | None = None,
+        caption: str = "",
+    ):
+        """Show an in-memory JPEG frame, used by the live camera viewfinder."""
+        with Image.open(BytesIO(jpeg)) as source:
+            source.load()
+            image = source.convert("RGB")
+        self._show_photo_image(image, duration=duration, caption=caption)
+
+    def clear_photo(self):
+        with self._photo_lock:
+            self._photo_preview = None
+            self._photo_preview_until = 0.0
+
+    def _show_photo_image(
+        self,
+        image: Image.Image,
+        duration: float | None = None,
+        caption: str = "",
+    ):
         width = self.board.LCD_WIDTH
         height = self.board.LCD_HEIGHT
         if self.ui_style == "watercolor":
@@ -236,6 +262,20 @@ class UIRenderer(threading.Thread):
                 (width, height),
                 method=Image.Resampling.LANCZOS,
             )
+            if caption:
+                draw = ImageDraw.Draw(photo)
+                font = self._status_font or self._terminal_font
+                bbox = draw.textbbox((0, 0), caption, font=font)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
+                x = max(4, (width - text_w) // 2)
+                y = height - text_h - 10
+                draw.rounded_rectangle(
+                    (x - 5, y - 4, min(width - 3, x + text_w + 5), height - 3),
+                    radius=4,
+                    fill=(0, 0, 0),
+                )
+                draw.text((x, y), caption, font=font, fill=(255, 255, 255))
             preview = {
                 "kind": "classic",
                 "frame": image_to_rgb565(photo, width, height),

@@ -219,9 +219,11 @@ only for caption layout and never for orb pixel rendering.
 | `XIAOZHI_CAMERA_HEIGHT` | Default capture height (120-960) | `960` |
 | `XIAOZHI_CAMERA_QUALITY` | JPEG quality (30-95) | `90` |
 | `XIAOZHI_CAMERA_VISION_TIMEOUT_SEC` | Vision service upload/analysis timeout | `60` |
+| `XIAOZHI_CAMERA_VIEWFINDER_FPS` | Manual live-view frame rate | `5` |
+| `XIAOZHI_CAMERA_DOUBLE_CLICK_SECONDS` | Maximum interval for entering the viewfinder by double-click | `0.38` |
 | `XIAOZHI_CAMERA_OUTPUT_DIR` | Local capture directory | `data/camera` |
 | `XIAOZHI_CAMERA_AUTOFOCUS` | Trigger autofocus before capture (Camera Module 3/IMX708) | `true` |
-| `XIAOZHI_CAMERA_PREVIEW_SECONDS` | Seconds to show a captured photo on the LCD | `4` |
+| `XIAOZHI_CAMERA_PREVIEW_SECONDS` | Seconds to show a captured photo on the LCD | `2` |
 
 ## MCP Tools
 
@@ -242,6 +244,7 @@ When `XIAOZHI_WEB_TOOLS_ENABLED=true`, the device also advertises:
 - `fetch_webpage`: fetches an HTTP(S) URL and returns the page title, readable text, and links. It can also open a link from the current or previous page using `link_text` or `link_index`.
 - `web_search`: searches the web and returns compact result titles and URLs. `search_type=web` uses DuckDuckGo HTML, `search_type=news` uses Google News RSS, and `search_type=sites` uses Google Programmable Search JSON API when configured.
 - `self.camera.take_photo`: captures a JPEG with the Raspberry Pi camera and uploads it to the authenticated vision endpoint supplied during MCP initialization. Like the verified cardputer implementation, any JSON response is returned intact as the first MCP text block, while plain text is wrapped in a `result` object. Recent captures remain in `XIAOZHI_CAMERA_OUTPUT_DIR`. The classic UI briefly shows the photo full-screen; watercolor mode shows it inside the orb circle before restoring the animation. Enable it with `XIAOZHI_CAMERA_TOOL_ENABLED=true`.
+- `self.camera.analyze_selected_photo`: analyzes the latest photo manually captured with the device button. Double-click the button to enter the live viewfinder, then single-click to save the current frame. The device starts listening automatically so the user can ask about the photo or use its contents in a task such as updating a shopping list. Manual photos use the `user-photo-*` filename and are not removed by the rotating automatic-capture cleanup.
 
 Set `XIAOZHI_WEB_TOOL_PROXY` to route those web requests through a proxy, or leave it
 empty to use standard proxy environment variables if they are already set.

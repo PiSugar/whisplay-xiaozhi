@@ -214,9 +214,11 @@ Python 只负责字幕排版，不再负责水彩球像素渲染。
 | `XIAOZHI_CAMERA_HEIGHT` | 默认拍照高度（120-960） | `960` |
 | `XIAOZHI_CAMERA_QUALITY` | JPEG 质量（30-95） | `90` |
 | `XIAOZHI_CAMERA_VISION_TIMEOUT_SEC` | 视觉服务上传与分析超时秒数 | `60` |
+| `XIAOZHI_CAMERA_VIEWFINDER_FPS` | 用户拍照实时取景帧率 | `5` |
+| `XIAOZHI_CAMERA_DOUBLE_CLICK_SECONDS` | 双击进入取景模式的最大按键间隔 | `0.38` |
 | `XIAOZHI_CAMERA_OUTPUT_DIR` | 照片本地保存目录 | `data/camera` |
 | `XIAOZHI_CAMERA_AUTOFOCUS` | 拍照前触发自动对焦（Camera Module 3/IMX708） | `true` |
-| `XIAOZHI_CAMERA_PREVIEW_SECONDS` | 拍照后在 LCD 上显示照片的秒数 | `4` |
+| `XIAOZHI_CAMERA_PREVIEW_SECONDS` | 拍照后在 LCD 上显示照片的秒数 | `2` |
 
 ## MCP 工具
 
@@ -236,6 +238,7 @@ Python 只负责字幕排版，不再负责水彩球像素渲染。
 - `fetch_webpage`：获取 HTTP(S) 网页，返回页面标题、可读正文和链接列表；也可以通过 `link_text` 或 `link_index` 继续打开当前页或上一页里的链接。
 - `web_search`：搜索网页并返回简洁的标题和 URL 列表。`search_type=web` 使用 DuckDuckGo HTML，`search_type=news` 使用 Google News RSS，`search_type=sites` 在配置后使用 Google Programmable Search JSON API。
 - `self.camera.take_photo`：通过树莓派摄像头拍摄 JPEG，并上传到 MCP 初始化时由服务器下发的鉴权视觉接口。与已验证的 cardputer 实现一致，视觉服务返回的任意 JSON 都会原样放入第一个 MCP 文本块，纯文本则包装为 `result` 对象。近期照片仍保存在 `XIAOZHI_CAMERA_OUTPUT_DIR`；经典 UI 会短暂全屏显示照片，水彩模式会在球体圆圈内显示，随后恢复动画。设置 `XIAOZHI_CAMERA_TOOL_ENABLED=true` 启用。
+- `self.camera.analyze_selected_photo`：分析用户通过设备按钮手动拍摄的最新照片。双击按钮进入实时取景，单击保存当前画面；保存后设备会自动开始聆听，用户可以继续询问照片内容，或要求把内容加入购物清单等任务。手动照片使用 `user-photo-*` 文件名长期保留，不受自动拍照轮换清理影响。
 
 设置 `XIAOZHI_WEB_TOOL_PROXY` 可以让这些网页请求走代理；留空时会自动使用
 已有的标准代理环境变量。

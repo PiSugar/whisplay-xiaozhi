@@ -61,6 +61,14 @@ class McpHandler:
             for name, tool in self._tools.items()
         ]
 
+    def update_description(self, name: str, description: str) -> None:
+        """Update a tool description before the next tools/list handshake."""
+        tool = self._tools.get(name)
+        if tool is None:
+            raise KeyError(f"Unknown tool: {name}")
+        tool.description = description
+        log.info("updated MCP tool description: %s", name)
+
     async def handle(self, payload: dict) -> tuple[str, dict] | None:
         """Process an incoming MCP message. Returns (id, result) or None."""
         rpc = payload.get("payload", {})
