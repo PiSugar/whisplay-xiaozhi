@@ -57,6 +57,13 @@ from protocol.web_tools import (
     is_enabled as web_tools_is_enabled,
     web_search,
 )
+from protocol.camera_tool import (
+    CAMERA_CAPTURE_DESCRIPTION,
+    CAMERA_CAPTURE_INPUT_SCHEMA,
+    capture_photo,
+    configure_vision,
+    is_enabled as camera_tool_is_enabled,
+)
 from protocol.ota_client import OtaClient
 from iot.thing_manager import ThingManager
 from iot.things.speaker import Speaker
@@ -145,6 +152,13 @@ class Application:
                 self._web_search_with_display,
                 description=WEB_SEARCH_DESCRIPTION,
                 input_schema=WEB_SEARCH_INPUT_SCHEMA,
+            )
+        if camera_tool_is_enabled():
+            self.mcp.register(
+                "self.camera.take_photo",
+                self._capture_photo_with_display,
+                description=CAMERA_CAPTURE_DESCRIPTION,
+                input_schema=CAMERA_CAPTURE_INPUT_SCHEMA,
             )
 
         # State
@@ -837,6 +851,24 @@ class Application:
         parseOtherMessage where it triggers a spurious goodbye (no
         matching pending request, bridge is null).
         """
+        rpc = payload.get("payload", {})
+        method = rpc.get("method", "")
+        if method == "initialize" and camera_tool_is_enabled():
+            capabilities = rpc.get("params", {}).get("capabilities", {})
+            vision = capabilities.get("vision", {})
+            if not isinstance(vision, dict):
+                vision = {}
+            configure_vision(
+                vision.get("url"),
+                vision.get("token"),
+                self.ota.device_id,
+                self.ota.client_id,
+            )
+            log.info(
+                "MCP capabilities received: %s",
+                sorted(capabilities.keys()),
+            )
+
         result = await self.mcp.handle(payload)
         if result:
             mcp_id, response = result
@@ -845,8 +877,6 @@ class Application:
             # Signal that MCP handshake is complete after tools/list response.
             # This unblocks the MQTT client's hello message — the gateway
             # needs our tool cache populated before we trigger bridge creation.
-            rpc = payload.get("payload", {})
-            method = rpc.get("method", "")
             if method == "tools/list" and hasattr(self.client, "mark_mcp_complete"):
                 self.client.mark_mcp_complete()
 
@@ -916,6 +946,20 @@ class Application:
             return await web_search(params, progress_callback=self._update_terminal_progress)
         finally:
             self._schedule_terminal_clear()
+
+    async def _capture_photo_with_display(self, params: dict):
+        try:
+            return await capture_photo(
+                params,
+                progress_callback=self._update_terminal_progress,
+                photo_callback=self._show_camera_photo,
+            )
+        finally:
+            self._schedule_terminal_clear()
+
+    def _show_camera_photo(self, image_path: str):
+        if self.display:
+            self.display.show_photo(image_path)
 
     def _update_terminal_progress(self, text: str | None):
         if text is None:

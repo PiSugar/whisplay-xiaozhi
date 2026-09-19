@@ -14,7 +14,7 @@ import math
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 import config
 from display.text_utils import (
@@ -22,6 +22,7 @@ from display.text_utils import (
     hex_to_rgb, luminance,
 )
 from display.watercolor_backend import create_watercolor_renderer
+from display.watercolor_orb import ORB_VERTICAL_OFFSET
 
 if TYPE_CHECKING:
     from hardware.whisplay_board import WhisplayBoard
@@ -138,6 +139,9 @@ class UIRenderer(threading.Thread):
         self._watercolor_caption_source = ""
         self._watercolor_caption_page = 0
         self._watercolor_caption_started_at = self._watercolor_frame_at
+        self._photo_lock = threading.Lock()
+        self._photo_preview: dict | None = None
+        self._photo_preview_until = 0.0
 
         resolved = _find_font(font_path)
         if not resolved:
@@ -193,6 +197,62 @@ class UIRenderer(threading.Thread):
     def update(self, **kwargs):
         """Thread-safe update of display data."""
         self.state.update(**kwargs)
+
+    def show_photo(self, image_path: str, duration: float | None = None):
+        """Temporarily show a captured photo without blocking the render thread."""
+        with Image.open(image_path) as source:
+            image = source.convert("RGB")
+        width = self.board.LCD_WIDTH
+        height = self.board.LCD_HEIGHT
+        if self.ui_style == "watercolor":
+            diameter = min(config.WATERCOLOR_DIAMETER, width, height)
+            photo = ImageOps.fit(
+                image,
+                (diameter, diameter),
+                method=Image.Resampling.LANCZOS,
+            )
+            scale = 4
+            mask_large = Image.new("L", (diameter * scale, diameter * scale), 0)
+            ImageDraw.Draw(mask_large).ellipse(
+                (0, 0, diameter * scale - 1, diameter * scale - 1), fill=255
+            )
+            mask = mask_large.resize(
+                (diameter, diameter), Image.Resampling.LANCZOS
+            )
+            x0 = (width - diameter) // 2
+            y0 = (height - diameter) // 2 + ORB_VERTICAL_OFFSET
+            preview = {
+                "kind": "watercolor",
+                "x0": x0,
+                "y0": y0,
+                "x1": x0 + diameter,
+                "y1": y0 + diameter,
+                "rgb": np.asarray(photo, dtype=np.uint16),
+                "alpha": np.asarray(mask, dtype=np.uint16)[..., None],
+            }
+        else:
+            photo = ImageOps.fit(
+                image,
+                (width, height),
+                method=Image.Resampling.LANCZOS,
+            )
+            preview = {
+                "kind": "classic",
+                "frame": image_to_rgb565(photo, width, height),
+            }
+        seconds = config.CAMERA_PREVIEW_SECONDS if duration is None else float(duration)
+        with self._photo_lock:
+            self._photo_preview = preview
+            self._photo_preview_until = time.monotonic() + max(0.1, seconds)
+
+    def _active_photo_preview(self) -> dict | None:
+        with self._photo_lock:
+            if self._photo_preview is None:
+                return None
+            if time.monotonic() >= self._photo_preview_until:
+                self._photo_preview = None
+                return None
+            return self._photo_preview
 
     @staticmethod
     def _empty_audio_features() -> dict:
@@ -288,9 +348,19 @@ class UIRenderer(threading.Thread):
             time.sleep(1)
 
     def _render_frame(self):
+        photo_preview = self._active_photo_preview()
+        if photo_preview and photo_preview["kind"] == "classic":
+            self.board.draw_image(
+                0,
+                0,
+                self.board.LCD_WIDTH,
+                self.board.LCD_HEIGHT,
+                photo_preview["frame"],
+            )
+            return
         snap = self.state.snapshot()
         if self._watercolor is not None:
-            self._render_watercolor_frame(snap)
+            self._render_watercolor_frame(snap, photo_preview)
             return
         W, H = self.board.LCD_WIDTH, self.board.LCD_HEIGHT
         header_h = 98  # status + emoji + margin
@@ -307,7 +377,7 @@ class UIRenderer(threading.Thread):
         self._draw_text_area(text_img, text_h, snap)
         self.board.draw_image(0, header_h, W, text_h, image_to_rgb565(text_img, W, text_h))
 
-    def _render_watercolor_frame(self, snap: dict):
+    def _render_watercolor_frame(self, snap: dict, photo_preview: dict | None = None):
         now = time.monotonic()
         elapsed = min(0.10, now - self._watercolor_frame_at)
         self._watercolor_frame_at = now
@@ -351,6 +421,8 @@ class UIRenderer(threading.Thread):
             caption_text=caption,
         )
         frame = self._composite_watercolor_status_icons(frame, snap)
+        if photo_preview and photo_preview["kind"] == "watercolor":
+            frame = self._composite_photo_preview(frame, photo_preview)
         self.board.draw_image(
             0,
             0,
@@ -358,6 +430,42 @@ class UIRenderer(threading.Thread):
             self.board.LCD_HEIGHT,
             frame,
         )
+
+    def _composite_photo_preview(self, frame: bytes, preview: dict) -> bytes:
+        """Alpha-composite a prepared circular photo into an RGB565 frame."""
+        width = self.board.LCD_WIDTH
+        height = self.board.LCD_HEIGHT
+        expected_size = width * height * 2
+        if len(frame) != expected_size:
+            raise ValueError(
+                f"photo base frame has {len(frame)} bytes, expected {expected_size}"
+            )
+        x0, y0, x1, y1 = (
+            preview["x0"],
+            preview["y0"],
+            preview["x1"],
+            preview["y1"],
+        )
+        foreground = preview["rgb"]
+        alpha = preview["alpha"]
+        packed = np.frombuffer(frame, dtype=">u2").reshape(height, width)
+        region = packed[y0:y1, x0:x1].astype(np.uint16)
+        base = np.empty((*region.shape, 3), dtype=np.uint16)
+        base[..., 0] = ((region >> 11) & 0x1F) * 255 // 31
+        base[..., 1] = ((region >> 5) & 0x3F) * 255 // 63
+        base[..., 2] = (region & 0x1F) * 255 // 31
+        mixed = (base * (255 - alpha) + foreground * alpha + 127) // 255
+        result = (
+            ((mixed[..., 0] >> 3) << 11)
+            | ((mixed[..., 1] >> 2) << 5)
+            | (mixed[..., 2] >> 3)
+        ).astype(">u2")
+        output = bytearray(frame)
+        row_bytes = (x1 - x0) * 2
+        for row, pixels in enumerate(result):
+            offset = ((y0 + row) * width + x0) * 2
+            output[offset : offset + row_bytes] = pixels.tobytes()
+        return bytes(output)
 
     def _composite_watercolor_status_icons(self, frame: bytes, snap: dict) -> bytes:
         """Alpha-composite the compact status group over native RGB565."""

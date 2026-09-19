@@ -20,6 +20,7 @@
 - **兼容 whisplay-daemon** — 检测到 daemon 时自动切换到 daemon 提供的 framebuffer / 按键 / LED
 - **唤醒词** — 支持 openwakeword 免摆键唤醒
 - **MCP 支持** — 服务端工具调用（JSON-RPC 2.0）
+- **树莓派摄像头** — 通过 MCP 拍照，并把 JPEG 图像内容返回给模型识别
 
 ## 硬件需求
 
@@ -207,6 +208,15 @@ Python 只负责字幕排版，不再负责水彩球像素渲染。
 | `XIAOZHI_WEB_SEARCH_RESULT_LIMIT` | 单次网页搜索返回结果上限 | `5` |
 | `XIAOZHI_GOOGLE_SEARCH_API_KEY` | `search_type=sites` 使用的 Google Programmable Search JSON API key | — |
 | `XIAOZHI_GOOGLE_SEARCH_ENGINE_ID` | `search_type=sites` 使用的 Google Programmable Search Engine ID (`cx`) | — |
+| `XIAOZHI_CAMERA_TOOL_ENABLED` | 向小智暴露官方 `self.camera.take_photo` MCP 工具 | `false` |
+| `XIAOZHI_CAMERA_INDEX` | 传给 `rpicam-still` 的摄像头编号 | `0` |
+| `XIAOZHI_CAMERA_WIDTH` | 默认拍照宽度（160-1280） | `1280` |
+| `XIAOZHI_CAMERA_HEIGHT` | 默认拍照高度（120-960） | `960` |
+| `XIAOZHI_CAMERA_QUALITY` | JPEG 质量（30-95） | `90` |
+| `XIAOZHI_CAMERA_VISION_TIMEOUT_SEC` | 视觉服务上传与分析超时秒数 | `60` |
+| `XIAOZHI_CAMERA_OUTPUT_DIR` | 照片本地保存目录 | `data/camera` |
+| `XIAOZHI_CAMERA_AUTOFOCUS` | 拍照前触发自动对焦（Camera Module 3/IMX708） | `true` |
+| `XIAOZHI_CAMERA_PREVIEW_SECONDS` | 拍照后在 LCD 上显示照片的秒数 | `4` |
 
 ## MCP 工具
 
@@ -225,6 +235,7 @@ Python 只负责字幕排版，不再负责水彩球像素渲染。
 
 - `fetch_webpage`：获取 HTTP(S) 网页，返回页面标题、可读正文和链接列表；也可以通过 `link_text` 或 `link_index` 继续打开当前页或上一页里的链接。
 - `web_search`：搜索网页并返回简洁的标题和 URL 列表。`search_type=web` 使用 DuckDuckGo HTML，`search_type=news` 使用 Google News RSS，`search_type=sites` 在配置后使用 Google Programmable Search JSON API。
+- `self.camera.take_photo`：通过树莓派摄像头拍摄 JPEG，并上传到 MCP 初始化时由服务器下发的鉴权视觉接口。与已验证的 cardputer 实现一致，视觉服务返回的任意 JSON 都会原样放入第一个 MCP 文本块，纯文本则包装为 `result` 对象。近期照片仍保存在 `XIAOZHI_CAMERA_OUTPUT_DIR`；经典 UI 会短暂全屏显示照片，水彩模式会在球体圆圈内显示，随后恢复动画。设置 `XIAOZHI_CAMERA_TOOL_ENABLED=true` 启用。
 
 设置 `XIAOZHI_WEB_TOOL_PROXY` 可以让这些网页请求走代理；留空时会自动使用
 已有的标准代理环境变量。

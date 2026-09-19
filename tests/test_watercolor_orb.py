@@ -1,12 +1,14 @@
 import os
 import importlib.util
 import sys
+import tempfile
+import threading
 import types
 import unittest
 from unittest.mock import patch
 
 import numpy as np
-from PIL import ImageFont
+from PIL import Image, ImageFont
 
 from display.watercolor_orb import OrbRenderer
 
@@ -32,6 +34,35 @@ class _FakeBoard:
 
 
 class WatercolorOrbTests(unittest.TestCase):
+    def test_photo_preview_covers_only_watercolor_circle_and_expires(self):
+        ui = object.__new__(UIRenderer)
+        ui.board = _FakeBoard()
+        ui.ui_style = "watercolor"
+        ui._photo_lock = threading.Lock()
+        ui._photo_preview = None
+        ui._photo_preview_until = 0.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, "photo.jpg")
+            Image.new("RGB", (320, 240), (255, 0, 0)).save(path, "JPEG")
+            with (
+                patch("config.WATERCOLOR_DIAMETER", 168),
+                patch("display.ui_renderer.time.monotonic", side_effect=[10.0, 10.05, 10.2]),
+            ):
+                ui.show_photo(path, duration=0.1)
+                preview = ui._active_photo_preview()
+                self.assertIsNotNone(preview)
+                frame = ui._composite_photo_preview(
+                    bytes(ui.board.LCD_WIDTH * ui.board.LCD_HEIGHT * 2), preview
+                )
+                self.assertIsNone(ui._active_photo_preview())
+
+        pixels = np.frombuffer(frame, dtype=">u2").reshape(
+            ui.board.LCD_HEIGHT, ui.board.LCD_WIDTH
+        )
+        self.assertNotEqual(pixels[130, 120], 0)
+        self.assertEqual(pixels[46, 36], 0)
+        self.assertEqual(pixels[20, 20], 0)
+
     def test_watercolor_composites_battery_and_wifi_in_top_right(self):
         ui = object.__new__(UIRenderer)
         ui.board = _FakeBoard()

@@ -20,6 +20,7 @@ Connects to the [XiaoZhi AI platform](https://xiaozhi.me) via WebSocket, providi
 - **whisplay-daemon Ready** — Auto-adapts to daemon framebuffer / button / LED mode when available
 - **Wake Word** — Hands-free activation via openwakeword
 - **MCP Support** — Server-side tool invocation (JSON-RPC 2.0)
+- **Raspberry Pi Camera** — MCP photo capture with JPEG image content returned to the model
 
 ## Hardware Requirements
 
@@ -212,6 +213,15 @@ only for caption layout and never for orb pixel rendering.
 | `XIAOZHI_WEB_SEARCH_RESULT_LIMIT` | Max web search results returned | `5` |
 | `XIAOZHI_GOOGLE_SEARCH_API_KEY` | Google Programmable Search JSON API key for `search_type=sites` | — |
 | `XIAOZHI_GOOGLE_SEARCH_ENGINE_ID` | Google Programmable Search Engine ID (`cx`) for `search_type=sites` | — |
+| `XIAOZHI_CAMERA_TOOL_ENABLED` | Expose the official `self.camera.take_photo` MCP tool | `false` |
+| `XIAOZHI_CAMERA_INDEX` | Camera index passed to `rpicam-still` | `0` |
+| `XIAOZHI_CAMERA_WIDTH` | Default capture width (160-1280) | `1280` |
+| `XIAOZHI_CAMERA_HEIGHT` | Default capture height (120-960) | `960` |
+| `XIAOZHI_CAMERA_QUALITY` | JPEG quality (30-95) | `90` |
+| `XIAOZHI_CAMERA_VISION_TIMEOUT_SEC` | Vision service upload/analysis timeout | `60` |
+| `XIAOZHI_CAMERA_OUTPUT_DIR` | Local capture directory | `data/camera` |
+| `XIAOZHI_CAMERA_AUTOFOCUS` | Trigger autofocus before capture (Camera Module 3/IMX708) | `true` |
+| `XIAOZHI_CAMERA_PREVIEW_SECONDS` | Seconds to show a captured photo on the LCD | `4` |
 
 ## MCP Tools
 
@@ -231,6 +241,7 @@ When `XIAOZHI_WEB_TOOLS_ENABLED=true`, the device also advertises:
 
 - `fetch_webpage`: fetches an HTTP(S) URL and returns the page title, readable text, and links. It can also open a link from the current or previous page using `link_text` or `link_index`.
 - `web_search`: searches the web and returns compact result titles and URLs. `search_type=web` uses DuckDuckGo HTML, `search_type=news` uses Google News RSS, and `search_type=sites` uses Google Programmable Search JSON API when configured.
+- `self.camera.take_photo`: captures a JPEG with the Raspberry Pi camera and uploads it to the authenticated vision endpoint supplied during MCP initialization. Like the verified cardputer implementation, any JSON response is returned intact as the first MCP text block, while plain text is wrapped in a `result` object. Recent captures remain in `XIAOZHI_CAMERA_OUTPUT_DIR`. The classic UI briefly shows the photo full-screen; watercolor mode shows it inside the orb circle before restoring the animation. Enable it with `XIAOZHI_CAMERA_TOOL_ENABLED=true`.
 
 Set `XIAOZHI_WEB_TOOL_PROXY` to route those web requests through a proxy, or leave it
 empty to use standard proxy environment variables if they are already set.

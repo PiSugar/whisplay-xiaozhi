@@ -20,6 +20,13 @@ ToolFunc = Callable[[dict], Any | Awaitable[Any]]
 
 
 @dataclass
+class McpToolResult:
+    """A tool result that already contains MCP content blocks."""
+
+    content: list[dict]
+
+
+@dataclass
 class Tool:
     func: ToolFunc
     description: str = ""
@@ -97,6 +104,8 @@ class McpHandler:
             if inspect.isawaitable(result):
                 result = await result
             log.info("MCP tool %s executed", tool_name)
+            if isinstance(result, McpToolResult):
+                return rpc_id, {"content": result.content}
             return rpc_id, {"content": [{"type": "text", "text": str(result)}]}
         except Exception as e:
             log.error("MCP tool %s error: %s", tool_name, e)
