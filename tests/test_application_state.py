@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import config
 from application import Application
+from protocol.mcp_handler import McpToolResult
 
 
 class ApplicationListeningStateTests(unittest.IsolatedAsyncioTestCase):
@@ -61,6 +62,26 @@ class ApplicationListeningStateTests(unittest.IsolatedAsyncioTestCase):
             emoji="✅",
             text="Photo attached. Tell Xiaozhi what to do with it.",
         )
+
+    async def test_official_camera_tool_uses_pending_button_photo(self):
+        app = object.__new__(Application)
+        app._pending_photo_for_next_input = True
+        app.mcp = Mock()
+        app._update_terminal_progress = Mock()
+        app._show_camera_photo = Mock()
+        app._schedule_terminal_clear = Mock()
+        vision = McpToolResult(
+            content=[{"type": "text", "text": '{"text":"a carton of milk"}'}]
+        )
+
+        with patch("application.analyze_selected_photo", AsyncMock(return_value=vision)):
+            result = await app._capture_photo_with_display(
+                {"question": "Add this to my shopping list"}
+            )
+
+        self.assertIs(result, vision)
+        self.assertFalse(app._pending_photo_for_next_input)
+        app.mcp.update_description.assert_called_once()
 
     async def test_start_listening_replaces_idle_prompt(self):
         app = object.__new__(Application)

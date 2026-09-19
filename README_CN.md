@@ -6,11 +6,11 @@
 
 基于树莓派 + Whisplay HAT + PiSugar 电池的小智AI语音客户端。
 
-通过 WebSocket 连接[小智AI平台](https://xiaozhi.me)，实现完整的语音交互流程：语音识别（ASR）、大模型对话（LLM）、语音合成（TTS），一个口袋大小的AI语音助手。
+使用 OTA 下发的 WebSocket 或 MQTT 凭据连接[小智AI平台](https://xiaozhi.me)，实现完整的语音交互流程：语音识别（ASR）、大模型对话（LLM）、语音合成（TTS），一个口袋大小的AI语音助手。也可以配置直连 WebSocket 地址连接自托管服务器。
 
 ## 功能
 
-- **WebSocket 语音对话** — 实现小智协议 v1，Opus 音频编解码
+- **WebSocket 或 MQTT 语音对话** — 实现小智协议 v1，Opus 音频编解码
 - **自动配对** — 设备在 LCD 上显示验证码，在 xiaozhi.me 输入即可绑定（无需手动填写 Token）
 - **按键唤醒** — 按下按键唤醒设备并开始自动聆听（服务端 VAD 控制语音结束）
 - **可选语音打断** — 检测到持续讲话时停止 TTS，并立即开始新一轮聆听
@@ -20,7 +20,7 @@
 - **兼容 whisplay-daemon** — 检测到 daemon 时自动切换到 daemon 提供的 framebuffer / 按键 / LED
 - **唤醒词** — 支持 openwakeword 免摆键唤醒
 - **MCP 支持** — 服务端工具调用（JSON-RPC 2.0）
-- **树莓派摄像头** — 通过 MCP 拍照，并把 JPEG 图像内容返回给模型识别
+- **树莓派摄像头** — 通过 MCP 拍照并上传到服务端下发的视觉接口，把分析结果返回给模型
 
 ## 硬件需求
 
@@ -30,6 +30,7 @@
 | Whisplay HAT | PiSugar Whisplay HAT（LCD + 麦克风 + 扬声器 + RGB LED + 按键） |
 | PiSugar 电池 | 1200mAh / 5000mAh |
 | WM8960 | 音频编解码器（HAT 自带） |
+| 树莓派摄像头 | `rpicam-still`/`rpicam-vid` 或对应 `libcamera-*` 命令支持的摄像头（可选） |
 
 ## 快速开始
 
@@ -84,6 +85,8 @@ whisplay-xiaozhi/
 ├── application.py          # 主状态机
 ├── protocol/
 │   ├── websocket_client.py # 小智 WebSocket 协议客户端
+│   ├── mqtt_client.py      # 小智 MQTT + UDP 协议客户端
+│   ├── camera_tool.py      # 拍照、取景与视觉接口上传
 │   └── mcp_handler.py      # MCP 工具调用处理
 ├── audio/
 │   ├── audio_codec.py      # Opus 编解码
@@ -94,7 +97,7 @@ whisplay-xiaozhi/
 │   ├── battery.py          # PiSugar 电池监测
 │   └── led_controller.py   # RGB LED 控制
 ├── display/
-│   ├── ui_renderer.py      # LCD UI 渲染（30 FPS）
+│   ├── ui_renderer.py      # 经典界面及可配置帧率的水彩球界面
 │   └── text_utils.py       # 文字/表情渲染工具
 ├── wakeword/
 │   └── detector.py         # 唤醒词检测
@@ -170,6 +173,9 @@ Python 只负责字幕排版，不再负责水彩球像素渲染。
 |------|------|--------|
 | `XIAOZHI_OTA_URL` | OTA / 激活 API 地址 | `https://api.tenclass.net/xiaozhi/ota/` |
 | `XIAOZHI_DEVICE_ID` | 设备ID（留空自动获取MAC） | — |
+| `XIAOZHI_CLIENT_ID` | 客户端 UUID（留空自动生成） | — |
+| `XIAOZHI_WS_URL` | 直连 WebSocket 地址；设置后绕过 OTA | — |
+| `XIAOZHI_WS_TOKEN` | 直连 WebSocket Token；服务器无需鉴权时可以留空 | — |
 | `ALSA_INPUT_DEVICE` | ALSA 录音设备 | `default` |
 | `ALSA_OUTPUT_DEVICE` | ALSA 播放设备 | `default` |
 | `BARGE_IN_ENABLED` | 允许语音打断助手 TTS | `false` |
@@ -209,16 +215,31 @@ Python 只负责字幕排版，不再负责水彩球像素渲染。
 | `XIAOZHI_GOOGLE_SEARCH_API_KEY` | `search_type=sites` 使用的 Google Programmable Search JSON API key | — |
 | `XIAOZHI_GOOGLE_SEARCH_ENGINE_ID` | `search_type=sites` 使用的 Google Programmable Search Engine ID (`cx`) | — |
 | `XIAOZHI_CAMERA_TOOL_ENABLED` | 向小智暴露官方 `self.camera.take_photo` MCP 工具 | `false` |
+| `XIAOZHI_CAMERA_COMMAND` | 静态拍照命令覆盖；留空自动检测 `rpicam-still`/`libcamera-still` | — |
+| `XIAOZHI_CAMERA_VIEWFINDER_COMMAND` | 实时取景命令覆盖；留空自动检测 `rpicam-vid`/`libcamera-vid` | — |
 | `XIAOZHI_CAMERA_INDEX` | 传给 `rpicam-still` 的摄像头编号 | `0` |
 | `XIAOZHI_CAMERA_WIDTH` | 默认拍照宽度（160-1280） | `1280` |
 | `XIAOZHI_CAMERA_HEIGHT` | 默认拍照高度（120-960） | `960` |
 | `XIAOZHI_CAMERA_QUALITY` | JPEG 质量（30-95） | `90` |
+| `XIAOZHI_CAMERA_WARMUP_MS` | 静态拍照前的摄像头预热毫秒数 | `2000` |
+| `XIAOZHI_CAMERA_TIMEOUT_SEC` | 静态拍照进程超时秒数 | `15` |
 | `XIAOZHI_CAMERA_VISION_TIMEOUT_SEC` | 视觉服务上传与分析超时秒数 | `60` |
+| `XIAOZHI_CAMERA_VIEWFINDER_WIDTH` | 手动实时取景宽度（320-1280） | `640` |
+| `XIAOZHI_CAMERA_VIEWFINDER_HEIGHT` | 手动实时取景高度（240-960） | `480` |
 | `XIAOZHI_CAMERA_VIEWFINDER_FPS` | 用户拍照实时取景帧率 | `5` |
+| `XIAOZHI_CAMERA_VIEWFINDER_QUALITY` | 手动实时取景 JPEG 质量（40-90） | `75` |
+| `XIAOZHI_CAMERA_VIEWFINDER_READY_TIMEOUT_SEC` | 等待首个取景帧的超时秒数 | `10` |
+| `XIAOZHI_CAMERA_MAX_FRAME_BYTES` | 允许的取景 JPEG 帧最大字节数 | `2097152` |
 | `XIAOZHI_CAMERA_DOUBLE_CLICK_SECONDS` | 双击进入取景模式的最大按键间隔 | `0.38` |
 | `XIAOZHI_CAMERA_OUTPUT_DIR` | 照片本地保存目录 | `data/camera` |
+| `XIAOZHI_CAMERA_KEEP_CAPTURES` | 保留的近期自动 `capture-*` 照片数量 | `10` |
 | `XIAOZHI_CAMERA_AUTOFOCUS` | 拍照前触发自动对焦（Camera Module 3/IMX708） | `true` |
-| `XIAOZHI_CAMERA_PREVIEW_SECONDS` | 拍照后在 LCD 上显示照片的秒数 | `2` |
+| `XIAOZHI_CAMERA_AUTOFOCUS_RANGE` | 自动对焦范围：`normal`、`macro` 或 `full` | `full` |
+| `XIAOZHI_CAMERA_AUTOFOCUS_SPEED` | 自动对焦速度：`normal` 或 `fast` | `fast` |
+| `XIAOZHI_CAMERA_PREVIEW_SECONDS` | 小智主动拍照后的 LCD 预览秒数 | `2` |
+| `XIAOZHI_CAMERA_USER_PHOTO_PREVIEW_SECONDS` | 用户按钮拍照后的 LCD 预览秒数 | `2` |
+
+此表列出主要配置；其他可部署设置及行内说明请查看 [`.env.template`](.env.template)。
 
 ## MCP 工具
 
@@ -237,11 +258,22 @@ Python 只负责字幕排版，不再负责水彩球像素渲染。
 
 - `fetch_webpage`：获取 HTTP(S) 网页，返回页面标题、可读正文和链接列表；也可以通过 `link_text` 或 `link_index` 继续打开当前页或上一页里的链接。
 - `web_search`：搜索网页并返回简洁的标题和 URL 列表。`search_type=web` 使用 DuckDuckGo HTML，`search_type=news` 使用 Google News RSS，`search_type=sites` 在配置后使用 Google Programmable Search JSON API。
-- `self.camera.take_photo`：通过树莓派摄像头拍摄 JPEG，并上传到 MCP 初始化时由服务器下发的鉴权视觉接口。与已验证的 cardputer 实现一致，视觉服务返回的任意 JSON 都会原样放入第一个 MCP 文本块，纯文本则包装为 `result` 对象。近期照片仍保存在 `XIAOZHI_CAMERA_OUTPUT_DIR`；经典 UI 会短暂全屏显示照片，水彩模式会在球体圆圈内显示，随后恢复动画。设置 `XIAOZHI_CAMERA_TOOL_ENABLED=true` 启用。
-- `self.camera.analyze_selected_photo`：分析用户通过设备按钮手动拍摄的最新照片。双击按钮进入实时取景，单击保存当前画面；保存后设备会自动开始聆听，用户可以继续询问照片内容，或要求把内容加入购物清单等任务。手动照片使用 `user-photo-*` 文件名长期保留，不受自动拍照轮换清理影响。
 
 设置 `XIAOZHI_WEB_TOOL_PROXY` 可以让这些网页请求走代理；留空时会自动使用
 已有的标准代理环境变量。
+
+当 `XIAOZHI_CAMERA_TOOL_ENABLED=true` 时，设备会独立注册
+`self.camera.take_photo`。该工具拍摄 JPEG、上传到 MCP 初始化时由服务器下发的鉴权
+视觉接口，并把视觉服务返回的 JSON 或文本分析作为 MCP 文本内容交给模型；JPEG 本身
+不会作为 MCP 图片内容块返回。必填参数 `question` 用于说明需要识别的内容；传入
+`use_selected_photo=true` 时，会分析最近一次通过按钮拍摄的照片，而不是重新拍照。
+
+手动拍照时，双击按钮进入实时取景，单击保存当前画面。随后设备会重连、自动进入
+聆听状态，并临时修改摄像头工具描述，引导托管模型在下一次请求中使用这张照片。
+这只是工具选择提示，并不是真正的协议级多模态附件：如果托管模型没有调用
+`self.camera.take_photo`，照片不会自动进入该轮对话。工具被调用时，程序会优先使用
+待处理的手动照片。手动 `user-photo-*` 文件不受自动 `capture-*` 照片轮换清理影响。
+经典 UI 全屏显示照片预览，水彩模式则在球体圆圈内显示。
 
 ## 开机自启
 

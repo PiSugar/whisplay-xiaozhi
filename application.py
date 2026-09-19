@@ -61,8 +61,6 @@ from protocol.camera_tool import (
     CAMERA_CAPTURE_DESCRIPTION,
     CAMERA_CAPTURE_INPUT_SCHEMA,
     PENDING_SELECTED_PHOTO_DESCRIPTION,
-    SELECTED_PHOTO_DESCRIPTION,
-    SELECTED_PHOTO_INPUT_SCHEMA,
     CameraViewfinder,
     analyze_selected_photo,
     capture_photo,
@@ -166,12 +164,6 @@ class Application:
                 description=CAMERA_CAPTURE_DESCRIPTION,
                 input_schema=CAMERA_CAPTURE_INPUT_SCHEMA,
             )
-            self.mcp.register(
-                "self.camera.analyze_selected_photo",
-                self._analyze_selected_photo_with_display,
-                description=SELECTED_PHOTO_DESCRIPTION,
-                input_schema=SELECTED_PHOTO_INPUT_SCHEMA,
-            )
 
         # State
         self._state = self.IDLE
@@ -191,6 +183,7 @@ class Application:
         self._button_click_task: asyncio.Task | None = None
         self._camera_viewfinder: CameraViewfinder | None = None
         self._camera_capture_task: asyncio.Task | None = None
+        self._pending_photo_for_next_input = False
 
     @property
     def state(self) -> str:
@@ -705,9 +698,10 @@ class Application:
             # session so the next utterance sees that context. Reconnecting also
             # guarantees auto-listen after captures made from the dormant state.
             self.mcp.update_description(
-                "self.camera.analyze_selected_photo",
+                "self.camera.take_photo",
                 PENDING_SELECTED_PHOTO_DESCRIPTION,
             )
+            self._pending_photo_for_next_input = True
             self._schedule_reconnect(silent=True, resume_listening=True)
         except Exception as exc:
             self._camera_viewfinder = None
@@ -1072,29 +1066,23 @@ class Application:
 
     async def _capture_photo_with_display(self, params: dict):
         try:
+            if self._pending_photo_for_next_input or params.get("use_selected_photo") is True:
+                result = await analyze_selected_photo(
+                    params,
+                    progress_callback=self._update_terminal_progress,
+                    photo_callback=self._show_camera_photo,
+                )
+                self._pending_photo_for_next_input = False
+                self.mcp.update_description(
+                    "self.camera.take_photo",
+                    CAMERA_CAPTURE_DESCRIPTION,
+                )
+                return result
             return await capture_photo(
                 params,
                 progress_callback=self._update_terminal_progress,
                 photo_callback=self._show_camera_photo,
             )
-        finally:
-            self._schedule_terminal_clear()
-
-    async def _analyze_selected_photo_with_display(self, params: dict):
-        try:
-            result = await analyze_selected_photo(
-                params,
-                progress_callback=self._update_terminal_progress,
-                photo_callback=self._show_camera_photo,
-            )
-            # Consume the automatic attachment marker locally. The active
-            # gateway session retains its cached description for this turn;
-            # future sessions return to normal persistent-photo semantics.
-            self.mcp.update_description(
-                "self.camera.analyze_selected_photo",
-                SELECTED_PHOTO_DESCRIPTION,
-            )
-            return result
         finally:
             self._schedule_terminal_clear()
 

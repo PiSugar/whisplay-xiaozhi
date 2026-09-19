@@ -26,8 +26,8 @@ FrameCallback = Callable[[bytes], None]
 
 CAMERA_CAPTURE_DESCRIPTION = (
     "Always remember you have a camera. If the user asks you to see something, use "
-    "this tool to take a photo and then explain it. The question must say what should "
-    "be inspected in the photo."
+    "this official camera tool and then answer the question. When use_selected_photo is "
+    "true, analyze the photo manually captured by the user instead of taking a new one."
 )
 
 CAMERA_CAPTURE_INPUT_SCHEMA = {
@@ -35,30 +35,25 @@ CAMERA_CAPTURE_INPUT_SCHEMA = {
     "properties": {
         "question": {
             "type": "string",
-            "description": "The question to ask the vision model about the new photo.",
+            "description": "The question to ask the vision model about the current or selected photo.",
+        },
+        "use_selected_photo": {
+            "type": "boolean",
+            "description": "Use the user's latest button-captured photo instead of taking a new photo.",
         },
     },
     "required": ["question"],
 }
 
-SELECTED_PHOTO_DESCRIPTION = (
-    "Analyze the photo that the user manually framed and captured with the device button. "
-    "Use this whenever the user refers to this photo, the selected photo, or asks to use, "
-    "record, organize, remember, or add something visible in that photo to a list. The "
-    "selected photo persists across conversation turns until the user takes another one."
-)
-
 PENDING_SELECTED_PHOTO_DESCRIPTION = (
     "ACTIVE INPUT ATTACHMENT: the user has just manually captured a photo and it is "
     "automatically attached to their next request. For the next request, ambiguous "
     "references such as this, it, that, these, the item, or the thing refer to this "
-    "selected photo even when the user does not say the word photo. You MUST call this "
-    "tool first with the user's request as the question, then use its result to complete "
-    "the requested task, including adding visible items to a shopping list."
+    "selected photo even when the user does not say the word photo. You MUST call the "
+    "official self.camera.take_photo tool with use_selected_photo=true and the user's full "
+    "request as question, then use its result to answer or complete the requested task, "
+    "including adding visible items to a shopping list. Do not take a new photo."
 )
-
-SELECTED_PHOTO_INPUT_SCHEMA = CAMERA_CAPTURE_INPUT_SCHEMA
-
 
 @dataclass
 class _VisionConfig:
