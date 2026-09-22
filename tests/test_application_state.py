@@ -9,6 +9,49 @@ from protocol.mcp_handler import McpToolResult
 
 
 class ApplicationListeningStateTests(unittest.IsolatedAsyncioTestCase):
+    def robot_button_app(self):
+        app = object.__new__(Application)
+        app._camera_viewfinder = None
+        app._button_click_task = None
+        app._button_hold_task = None
+        app._robot_button_down = False
+        app._robot_button_rotated = False
+        app._robot_second_click = False
+        app.display = Mock()
+        app._handle_button_press = AsyncMock()
+        app._enter_camera_viewfinder = AsyncMock()
+        return app
+
+    async def test_robot_hold_rotates_once_without_wake(self):
+        app = self.robot_button_app()
+        with patch('application.config.DISPLAY_UI_STYLE', 'robot'):
+            await app._handle_physical_button_down()
+            await asyncio.sleep(0.70)
+            await app._handle_physical_button_down()
+            await asyncio.sleep(0.05)
+            await app._handle_physical_button_up()
+        app.display.rotate_robot_view.assert_called_once()
+        app._handle_button_press.assert_not_awaited()
+        app._enter_camera_viewfinder.assert_not_awaited()
+
+    async def test_robot_short_and_double_click_remain_available(self):
+        app = self.robot_button_app()
+        with patch('application.config.DISPLAY_UI_STYLE', 'robot'), patch(
+            'application.config.CAMERA_DOUBLE_CLICK_SECONDS', 0.02
+        ):
+            await app._handle_physical_button_down()
+            await app._handle_physical_button_up()
+            await asyncio.sleep(0.04)
+            app._handle_button_press.assert_awaited_once()
+            app._handle_button_press.reset_mock()
+            for _ in range(2):
+                await app._handle_physical_button_down()
+                await app._handle_physical_button_up()
+            await asyncio.sleep(0.04)
+        app._enter_camera_viewfinder.assert_awaited_once()
+        app._handle_button_press.assert_not_awaited()
+        app.display.rotate_robot_view.assert_not_called()
+
     async def test_double_click_enters_camera_without_single_click_action(self):
         app = object.__new__(Application)
         app._camera_viewfinder = None
@@ -102,9 +145,20 @@ class ApplicationListeningStateTests(unittest.IsolatedAsyncioTestCase):
             await app._recording_task
 
         app._update_display.assert_any_call(
-            status="Listening...", emoji="🎤", text=""
+            status="Listening...", emoji="🎤", text="", activity="listening"
         )
         self.assertEqual(app.state, app.LISTENING)
+
+    async def test_recognition_and_listen_stop_trigger_thinking_animation(self):
+        app = object.__new__(Application)
+        app._state = app.LISTENING
+        app._stop_listening = AsyncMock()
+        app._update_display = Mock()
+        await app._on_stt("What is this?")
+        app._update_display.assert_any_call(status="Thinking...", emoji="🤔", activity="thinking")
+        app._update_display.reset_mock()
+        await app._on_listen_stop()
+        app._update_display.assert_any_call(status="Thinking...", emoji="🤔", activity="thinking")
 
     async def test_speaker_write_drives_watercolor_and_echo_reference(self):
         app = object.__new__(Application)

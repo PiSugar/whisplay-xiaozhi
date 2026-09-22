@@ -5,6 +5,9 @@ use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod robot;
+mod robot_gestures;
+
 // Exact advanced-bloop palette from the ChatGPT voice UI bundle saved on
 // 2026-07-15. These are shader-space colours, not colours sampled from a
 // screenshot after compositing.
@@ -12,8 +15,7 @@ const MAIN: [f32; 3] = [0.862_745, 0.968_627, 1.0]; // #DCF7FF
 const LOW: [f32; 3] = [0.003_922, 0.505_882, 0.996_078]; // #0181FE
 const MID: [f32; 3] = [0.643_137, 0.937_255, 1.0]; // #A4EFFF
 const HIGH: [f32; 3] = [1.0, 0.992_157, 0.937_255]; // #FFFDEF
-const WATERCOLOR_TEXTURE: &[u8] =
-    include_bytes!("../assets/noise-watercolor-rg-256.bin");
+const WATERCOLOR_TEXTURE: &[u8] = include_bytes!("../assets/noise-watercolor-rg-256.bin");
 
 #[inline]
 fn clamp(value: f32, low: f32, high: f32) -> f32 {
@@ -43,13 +45,7 @@ fn cubic(p0: f32, p1: f32, p2: f32, p3: f32, amount: f32) -> f32 {
 }
 
 #[inline]
-fn sample_bicubic(
-    pixels: &[[f32; 3]],
-    width: usize,
-    height: usize,
-    x: f32,
-    y: f32,
-) -> [f32; 3] {
+fn sample_bicubic(pixels: &[[f32; 3]], width: usize, height: usize, x: f32, y: f32) -> [f32; 3] {
     let base_x = x.floor() as isize;
     let base_y = y.floor() as isize;
     let fx = x - base_x as f32;
@@ -72,13 +68,7 @@ fn sample_bicubic(
 }
 
 #[inline]
-fn sample_bilinear(
-    pixels: &[[f32; 3]],
-    width: usize,
-    height: usize,
-    x: f32,
-    y: f32,
-) -> [f32; 3] {
+fn sample_bilinear(pixels: &[[f32; 3]], width: usize, height: usize, x: f32, y: f32) -> [f32; 3] {
     let x0 = x.floor().clamp(0.0, width as f32 - 1.0) as usize;
     let y0 = y.floor().clamp(0.0, height as f32 - 1.0) as usize;
     let x1 = (x0 + 1).min(width - 1);
@@ -427,7 +417,12 @@ impl OrbRenderer {
                     let mut u = self.x[index] * 0.5 + 0.5;
                     let mut v = 1.0 - ((self.y[index] - vertical) * 0.5 + 0.5);
                     let noise_x = noise3(u, v + 74.8572, (time + travelled[0] * 0.05) * 0.3, 3.17);
-                    let noise_y = noise3(u + 203.91282, v + 10.0, (time + travelled[2] * 0.05) * 0.3, 7.91);
+                    let noise_y = noise3(
+                        u + 203.91282,
+                        v + 10.0,
+                        (time + travelled[2] * 0.05) * 0.3,
+                        7.91,
+                    );
                     u += noise_x * 0.38;
                     v += noise_y * 0.19;
 
@@ -461,14 +456,39 @@ impl OrbRenderer {
                     let st_y = v * 1.25;
                     let qx_clock = 0.075 * (time + travelled[3] * 0.175);
                     let qy_clock = 0.075 * (time + travelled[0] * 0.136);
-                    let q_x = sample_fbm(table, st_x * 0.5 + qx_clock, st_y * 0.5 + qx_clock, smooth_fbm);
-                    let q_y = sample_fbm(table, st_x * 0.5 + qy_clock, st_y * 0.5 + qy_clock, smooth_fbm);
+                    let q_x = sample_fbm(
+                        table,
+                        st_x * 0.5 + qx_clock,
+                        st_y * 0.5 + qx_clock,
+                        smooth_fbm,
+                    );
+                    let q_y = sample_fbm(
+                        table,
+                        st_x * 0.5 + qy_clock,
+                        st_y * 0.5 + qy_clock,
+                        smooth_fbm,
+                    );
                     let rx_clock = 0.15 * (time + travelled[1] * 0.234);
                     let ry_clock = 0.126 * (time + travelled[2] * 0.165);
-                    let r_x = sample_fbm(table, st_x + q_x + 0.3 + rx_clock, st_y + q_y + 9.2 + rx_clock, smooth_fbm);
-                    let r_y = sample_fbm(table, st_x + q_x + 8.3 + ry_clock, st_y + q_y + 0.8 + ry_clock, smooth_fbm);
+                    let r_x = sample_fbm(
+                        table,
+                        st_x + q_x + 0.3 + rx_clock,
+                        st_y + q_y + 9.2 + rx_clock,
+                        smooth_fbm,
+                    );
+                    let r_y = sample_fbm(
+                        table,
+                        st_x + q_x + 8.3 + ry_clock,
+                        st_y + q_y + 0.8 + ry_clock,
+                        smooth_fbm,
+                    );
                     let field = sample_fbm(table, st_x + r_x - q_x, st_y + r_y - q_y, smooth_fbm);
-                    let full_fbm = clamp((field + 0.6 * field * field + 0.7 * field + 0.5) * 0.5, 0.0, f32::MAX).powf(0.55);
+                    let full_fbm = clamp(
+                        (field + 0.6 * field * field + 0.7 * field + 0.5) * 0.5,
+                        0.0,
+                        f32::MAX,
+                    )
+                    .powf(0.55);
                     let fbm_centered = full_fbm - 0.5;
 
                     let layer1_x = u + fbm_centered * 1.2 + 0.025 + displacement0;
@@ -481,7 +501,8 @@ impl OrbRenderer {
                         layer1_noise - 1.8,
                         layer1_noise + 1.8,
                         (base_y - 0.5) * (5.0 - reactive[0] * 0.05) + 0.5,
-                    ).powf(0.8);
+                    )
+                    .powf(0.8);
 
                     let layer2_x = u + fbm_centered * 0.85 + 0.025 + displacement1;
                     let layer2_y = v + fbm_centered * 0.85 + 0.025 + displacement1;
@@ -493,7 +514,8 @@ impl OrbRenderer {
                         layer2_noise - (0.9 + reactive[1] * 0.70) * 1.5,
                         layer2_noise + (0.9 + reactive[1] * 1.30) * 1.5,
                         (layer2_y - 0.6) * (5.0 - reactive[1] * 0.75) + 0.5,
-                    ).powf(0.9);
+                    )
+                    .powf(0.9);
 
                     let layer3_x = u + fbm_centered * 1.1 + displacement3;
                     let layer3_y = v + fbm_centered * 1.1 + displacement3;
@@ -577,11 +599,8 @@ impl OrbRenderer {
                                 (source_x - 1.35).max(0.0),
                                 (source_y + 1.05).min(rh as f32 - 1.0),
                             );
-                            let pigment_delta = clamp(
-                                (luminance(rgb) - luminance(trail)) / 58.0,
-                                0.0,
-                                1.0,
-                            );
+                            let pigment_delta =
+                                clamp((luminance(rgb) - luminance(trail)) / 58.0, 0.0, 1.0);
                             let broken_edge = self.bristle_mask[detail_index];
                             let bristle = pigment_delta * broken_edge * 0.46;
                             for channel in 0..3 {
@@ -620,6 +639,7 @@ impl OrbRenderer {
 #[pymodule]
 fn _watercolor_rust(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<OrbRenderer>()?;
+    module.add_class::<robot::RobotRenderer>()?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

@@ -11,4 +11,5 @@ assets/emoji_svg.zip
 assets/NotoSansSC-Bold.ttf
 display/_watercolor_rust*.so
 rust/watercolor_renderer/target/
+rust/watercolor_renderer/prebuilt/darwin-*/
 .DS_Store

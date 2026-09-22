@@ -181,6 +181,10 @@ class Application:
         self._terminal_clear_task: asyncio.Task | None = None
         self._terminal_shown_at: float | None = None
         self._button_click_task: asyncio.Task | None = None
+        self._button_hold_task: asyncio.Task | None = None
+        self._robot_button_down = False
+        self._robot_button_rotated = False
+        self._robot_second_click = False
         self._camera_viewfinder: CameraViewfinder | None = None
         self._camera_capture_task: asyncio.Task | None = None
         self._pending_photo_for_next_input = False
@@ -263,6 +267,9 @@ class Application:
         if self._button_click_task:
             self._button_click_task.cancel()
             self._button_click_task = None
+        if self._button_hold_task:
+            self._button_hold_task.cancel()
+            self._button_hold_task = None
         if self._camera_capture_task:
             self._camera_capture_task.cancel()
             self._camera_capture_task = None
@@ -600,12 +607,52 @@ class Application:
         """Button pressed — resolve a normal click or camera double-click."""
         if self._loop:
             self._loop.call_soon_threadsafe(
-                asyncio.ensure_future, self._handle_button_click_event()
+                asyncio.ensure_future, self._handle_physical_button_down()
             )
 
     def _on_button_release(self):
-        """Button released — no-op in push-to-wake mode."""
-        pass
+        if self._loop:
+            self._loop.call_soon_threadsafe(
+                asyncio.ensure_future, self._handle_physical_button_up()
+            )
+
+    async def _handle_physical_button_down(self):
+        if config.DISPLAY_UI_STYLE != "robot" or self._camera_viewfinder is not None:
+            await self._handle_button_click_event()
+            return
+        if self._robot_button_down:
+            return
+        self._robot_button_down = True
+        self._robot_button_rotated = False
+        pending = self._button_click_task
+        self._robot_second_click = pending is not None and not pending.done()
+        if self._robot_second_click:
+            pending.cancel()
+            self._button_click_task = None
+        self._button_hold_task = asyncio.create_task(self._rotate_on_button_hold())
+
+    async def _rotate_on_button_hold(self):
+        try:
+            await asyncio.sleep(0.65)
+            if self._robot_button_down:
+                self._robot_button_rotated = True
+                if self.display:
+                    self.display.rotate_robot_view()
+        except asyncio.CancelledError:
+            pass
+
+    async def _handle_physical_button_up(self):
+        if not self._robot_button_down:
+            return
+        self._robot_button_down = False
+        if self._button_hold_task:
+            self._button_hold_task.cancel()
+            self._button_hold_task = None
+        if not self._robot_button_rotated:
+            if self._robot_second_click:
+                await self._enter_camera_viewfinder()
+            else:
+                await self._handle_button_click_event()
 
     def _on_exit_request(self):
         """Daemon requested app exit (e.g. home/exit gesture)."""
@@ -751,7 +798,7 @@ class Application:
         # Clear the idle call-to-action as soon as capture starts. Watercolor
         # captions prefer text over status, so leaving the old text in place
         # makes an active listener misleadingly say "Press button to wake...".
-        self._update_display(status="Listening...", emoji="🎤", text="")
+        self._update_display(status="Listening...", emoji="🎤", text="", activity="listening")
         self._tts_text_buffer = ""
 
         try:
@@ -859,7 +906,7 @@ class Application:
         """Server-side VAD detected end of speech; stop recording."""
         if self._state == self.LISTENING:
             await self._stop_listening()
-            self._update_display(status="Thinking...", emoji="\U0001f914")
+            self._update_display(status="Thinking...", emoji="\U0001f914", activity="thinking")
         elif self._state == self.IDLE:
             # Server sent listen stop while idle — end of conversation
             self._keep_listening = False
@@ -876,7 +923,7 @@ class Application:
             return
         # Server recognized speech; stop recording (server VAD triggered)
         await self._stop_listening()
-        self._update_display(status="Thinking...", emoji="🤔")
+        self._update_display(status="Thinking...", emoji="🤔", activity="thinking")
         self._update_display(text=f"🗣️ {text}")
 
     async def _on_llm_emotion(self, emoji: str):

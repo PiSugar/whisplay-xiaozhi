@@ -11,6 +11,9 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 rayon = "1.10"
 
+[build-dependencies]
+pyo3-build-config = "0.22"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

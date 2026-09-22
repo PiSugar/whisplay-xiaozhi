@@ -23,6 +23,7 @@ from display.text_utils import (
     hex_to_rgb, luminance,
 )
 from display.watercolor_backend import create_watercolor_renderer
+from display.robot_backend import RustRobotRenderer
 from display.watercolor_orb import ORB_VERTICAL_OFFSET
 
 if TYPE_CHECKING:
@@ -127,6 +128,8 @@ class UIRenderer(threading.Thread):
         self.board = board
         self.ui_style = config.DISPLAY_UI_STYLE
         self.fps = fps or (config.WATERCOLOR_FPS if self.ui_style == "watercolor" else 30)
+        if self.ui_style == "robot":
+            self.fps = fps or config.ROBOT_FPS
         self.running = False
         self.state = DisplayState()
         self._audio_lock = threading.Lock()
@@ -137,6 +140,10 @@ class UIRenderer(threading.Thread):
         self._watercolor_phase = 0.0
         self._watercolor_frame_at = time.monotonic()
         self._watercolor = None
+        self._robot = None
+        self._robot_rotate_requested = threading.Event()
+        self._robot_started_at = self._watercolor_frame_at
+        self._robot_idle_since = self._watercolor_frame_at
         self._watercolor_caption_source = ""
         self._watercolor_caption_page = 0
         self._watercolor_caption_started_at = self._watercolor_frame_at
@@ -191,6 +198,16 @@ class UIRenderer(threading.Thread):
                 caption_offset_x=config.WATERCOLOR_CAPTION_OFFSET_X,
             )
 
+        if self.ui_style == "robot":
+            self._robot = RustRobotRenderer(
+                width=self.board.LCD_WIDTH,
+                height=self.board.LCD_HEIGHT,
+                diameter=config.WATERCOLOR_DIAMETER,
+                caption_font_path=resolved,
+                caption_font_size=config.WATERCOLOR_CAPTION_FONT_SIZE,
+                caption_offset_x=config.WATERCOLOR_CAPTION_OFFSET_X,
+            )
+
         # Show startup screen
         self._render_logo()
 
@@ -230,7 +247,22 @@ class UIRenderer(threading.Thread):
     ):
         width = self.board.LCD_WIDTH
         height = self.board.LCD_HEIGHT
-        if self.ui_style == "watercolor":
+        if self.ui_style == "robot":
+            # Edge-to-edge crop: no matte or letterboxing in the small card.
+            card_w = min(76, width)
+            card_h = min(44, height)
+            photo = ImageOps.fit(
+                image, (card_w, card_h), Image.Resampling.LANCZOS
+            )
+            x0 = (width - card_w) // 2
+            y0 = max(0, min(height - card_h, int(height * 0.14)))
+            preview = {
+                "kind": "robot", "x0": x0, "y0": y0,
+                "x1": x0 + card_w, "y1": y0 + card_h,
+                "rgb": np.asarray(photo, dtype=np.uint16),
+                "alpha": np.full((card_h, card_w, 1), 255, dtype=np.uint16),
+            }
+        elif self.ui_style == "watercolor":
             diameter = min(config.WATERCOLOR_DIAMETER, width, height)
             photo = ImageOps.fit(
                 image,
@@ -399,6 +431,9 @@ class UIRenderer(threading.Thread):
             )
             return
         snap = self.state.snapshot()
+        if self._robot is not None:
+            self._render_robot_frame(snap, photo_preview)
+            return
         if self._watercolor is not None:
             self._render_watercolor_frame(snap, photo_preview)
             return
@@ -416,6 +451,37 @@ class UIRenderer(threading.Thread):
         text_img = Image.new("RGBA", (W, text_h), (0, 0, 0, 255))
         self._draw_text_area(text_img, text_h, snap)
         self.board.draw_image(0, header_h, W, text_h, image_to_rgb565(text_img, W, text_h))
+
+    def rotate_robot_view(self):
+        if self._robot is not None:
+            self._robot_rotate_requested.set()
+
+    def _render_robot_frame(self, snap: dict, photo_preview: dict | None = None):
+        if self._robot_rotate_requested.is_set():
+            self._robot_rotate_requested.clear()
+            self._robot.rotate_view()
+        now = time.monotonic()
+        activity = snap.get("activity", "idle")
+        thinking = activity == "thinking"
+        working = not thinking and (
+            activity in ("connecting", "activating", "speaking") or bool(snap.get("terminal_text"))
+        )
+        if activity != "idle" or working or photo_preview:
+            self._robot_idle_since = now
+        frame = self._robot.render(
+            now - self._robot_started_at, working,
+            max(0.0, now - self._robot_idle_since), config.ROBOT_SLEEP_AFTER,
+            self._select_watercolor_caption(snap, now),
+            thinking=thinking,
+            effects_allowed=(config.ROBOT_EVENTS_ENABLED and not photo_preview
+                             and activity in ("idle", "speaking", "connecting", "activating")
+                             and not snap.get("terminal_text")),
+        )
+        if photo_preview and photo_preview["kind"] == "robot":
+            frame = self._composite_photo_preview(frame, photo_preview)
+        frame = self._composite_watercolor_status_icons(frame, snap)
+        frame = self._composite_caption_tool_tag(frame, snap)
+        self.board.draw_image(0, 0, self.board.LCD_WIDTH, self.board.LCD_HEIGHT, frame)
 
     def _render_watercolor_frame(self, snap: dict, photo_preview: dict | None = None):
         now = time.monotonic()
@@ -463,6 +529,7 @@ class UIRenderer(threading.Thread):
         frame = self._composite_watercolor_status_icons(frame, snap)
         if photo_preview and photo_preview["kind"] == "watercolor":
             frame = self._composite_photo_preview(frame, photo_preview)
+        frame = self._composite_caption_tool_tag(frame, snap)
         self.board.draw_image(
             0,
             0,
@@ -574,11 +641,62 @@ class UIRenderer(threading.Thread):
             output[offset : offset + row_bytes] = pixels.tobytes()
         return bytes(output)
 
+    def _compact_caption_content(self, snap: dict):
+        text = snap.get("text") or snap.get("status", "")
+        terminal = snap.get("terminal_text") or ""
+        key = (text, terminal)
+        cached = getattr(self, "_compact_caption_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        matches = list(_TOOL_TAG_RE.finditer(text))
+        caption = re.sub(r"\s+", " ", _TOOL_TAG_RE.sub("", text)).strip()
+        label, count = "", 0
+        for match in matches:
+            name = match.group(1)
+            count = count + 1 if name == label else 1
+            label = name
+        # Progress belongs to the separate tag region, never to caption paging.
+        progress_tags = list(_TOOL_TAG_RE.finditer(terminal))
+        if progress_tags:
+            label, count = progress_tags[-1].group(1), 1
+        elif terminal and not label:
+            label, count = "工具执行中", 1
+        result = (caption, label, count)
+        self._compact_caption_cache = (key, result)
+        return result
+
+    def _composite_caption_tool_tag(self, frame: bytes, snap: dict) -> bytes:
+        _, label, count = self._compact_caption_content(snap)
+        if not label:
+            return frame
+        font = getattr(self, "_tool_tag_font", None) or getattr(self, "_status_font", None)
+        if font is None:
+            return frame
+        width, height = self.board.LCD_WIDTH, self.board.LCD_HEIGHT
+        renderer = self._watercolor or self._robot
+        caption_top = renderer._captions.status_top
+        tag_height = 28
+        y0 = max(0, int(caption_top) - tag_height - 4)
+        key = (label, count, width, y0, id(font))
+        cached = getattr(self, "_compact_tag_cache", None)
+        if cached is None or cached[0] != key:
+            reserve = int(font.getlength(f"x{count}")) + 7 if count > 1 else 0
+            clipped = self._clip_to_width(label, font, max(1, width - 44 - reserve))
+            tag_width = min(width-24, int(font.getlength(clipped)) + reserve + 20)
+            layer = Image.new("RGBA", (width, tag_height), (0, 0, 0, 0))
+            self._draw_tool_tag(layer, clipped, count, font, (width-tag_width)//2, 0, tag_width, tag_height)
+            rgba = np.asarray(layer, dtype=np.uint16)
+            preview = {"x0": 0, "y0": y0, "x1": width, "y1": y0+tag_height,
+                       "rgb": rgba[..., :3], "alpha": rgba[..., 3:]}
+            self._compact_tag_cache = (key, preview)
+        return self._composite_photo_preview(frame, self._compact_tag_cache[1])
+
     def _select_watercolor_caption(self, snap: dict, now: float) -> str:
         """Advance speaking captions page by page without skipping new text."""
-        terminal = snap.get("terminal_text") or ""
         activity = snap.get("activity", "idle")
-        caption = snap.get("text") or snap.get("status", "")
+        caption, tool_label, _ = self._compact_caption_content(snap)
+        if not caption and tool_label:
+            caption = self._watercolor_caption_source
         # The classic UI uses this speaker emoji as a visual label. Emoji
         # glyphs are intentionally absent from the compact watercolor caption
         # font set, so remove only this known prefix instead of showing tofu.
@@ -586,11 +704,13 @@ class UIRenderer(threading.Thread):
             if caption.startswith(speaker_prefix):
                 caption = caption[len(speaker_prefix):].lstrip()
                 break
-        if terminal or activity != "speaking":
+        continuing_caption = (activity != "listening" and bool(self._watercolor_caption_source)
+                              and caption.startswith(self._watercolor_caption_source))
+        if activity != "speaking" and not continuing_caption:
             self._watercolor_caption_source = ""
             self._watercolor_caption_page = 0
             self._watercolor_caption_started_at = now
-            return terminal or caption
+            return caption
 
         if caption != self._watercolor_caption_source:
             appended = bool(self._watercolor_caption_source) and caption.startswith(
@@ -601,7 +721,8 @@ class UIRenderer(threading.Thread):
                 self._watercolor_caption_page = 0
                 self._watercolor_caption_started_at = now
 
-        pages = self._watercolor.caption_pages(caption)
+        renderer = self._watercolor or self._robot
+        pages = renderer.caption_pages(caption)
         if not pages:
             return ""
         self._watercolor_caption_page = min(

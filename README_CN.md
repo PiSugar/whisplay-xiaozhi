@@ -147,6 +147,62 @@ WATERCOLOR_THREADS=2
 设置 `BARGE_IN_ENABLED=true` 可启用语音打断。如果扬声器回声导致误触发，
 请提高 `BARGE_IN_MIN_RMS`。
 
+### 开启 3D 工位机器人
+
+![工位机器人动画预览](assets/robot-workstation.gif)
+
+在 `.env` 中设置以下参数并重启应用：
+
+```dotenv
+DISPLAY_UI_STYLE=robot
+ROBOT_FPS=30
+ROBOT_SLEEP_AFTER=45
+```
+
+屏幕中央是一小块等距视角的立体方块地图，镜头从机器人右后方越肩看向工位，
+笔记本屏幕朝向机器人，键盘在它身前。小手臂使用固定长度的两段关节。
+闲置时机器人会随机回头，朝用户停留 2.5～4.5 秒、轻微抬头并眨眼，再自然转回；
+回头间隔、速度和日常眨眼时间都有变化，闲置时偶尔坐着交替踢脚或伸懒腰：
+双臂向上舒展、轻轻后仰眯眼、稍作停留后放松，约 4.3 秒，与踢脚和回头错开。
+还会随机朝用户转头挥手打招呼，或抬起左手腕低头查看发光的小表盘；
+两种动作各约 3.8 秒，与其他闲置动作互斥，工作或唤醒时平滑退出。
+闲置达到 45 秒后，随机选择趴桌睡觉或在笔记本上玩像素射击游戏；游戏持续约
+18～28 秒，之后休息 35～60 秒，继续闲置时轮换。睡觉时左手搭桌、右手下垂；连接、激活、说话或
+显示工具执行状态时敲键盘，等待回复的 `thinking` 状态会抬右手挠头、轻微歪头，
+聆听和拍照会唤醒它。笔记本显示变化的装饰性命令行。
+工作时头部轻微左右扫视屏幕，随机穿插短暂思考和拿杯喝水（拿起、轻倾、放回），
+再继续打字；这些小动作不会改变实际语音状态，遇到真正的聆听、思考或突发事件会让位。
+睡眠时明亮的 “Z” 会在头顶高处向上飘。长按按钮约 0.65 秒，镜头绕地面法线
+用 0.9 秒平滑旋转 90°；每次按住只转一次，四次回到原视角。短按唤醒、双击拍照不变。
+照片以机器人上方的小缩略图显示，等比例居中裁切铺满弹窗、不留底色边框，
+沿用 `CAMERA_PREVIEW_SECONDS`，不会替换整个工位。
+Wi-Fi、电池、字幕排版与分页沿用水彩球模式及 `WATERCOLOR_CAPTION_*` 设置。
+机器人和水彩球模式会把正文中的 `%工具名...` 提取为字幕上方独立的蓝色工具标签，
+重复调用显示次数；工具进度不再覆盖字幕，也不会重置字幕的分页计时。
+
+默认开启随机小事件：电脑起火时先受惊缩手，扭头俯身从椅子下拿灭火器，瞄准火焰喷泡沫后放回；
+下雨时先抬头、缩肩遮雨，再俯身拿伞、举到头顶中央，撑好后单手继续工作。
+事件分别持续约 13 秒和 16 秒，会自动恢复正常姿态，且不会重叠。
+首次在允许播放的清醒时间累计 18～35 秒后随机出现，之后间隔 40～90 秒；睡觉时
+不启动，聆听、思考、工具状态或照片预览会让当前事件在约 0.45 秒内淡出。
+设置 `ROBOT_EVENTS_ENABLED=false` 可关闭。事件仅影响画面，不改变对话或音频状态。
+
+![随机小事件预览](assets/robot-events.gif)
+
+可用 `python tools/preview_robot.py --events --output /tmp/robot-events.gif` 预览两个完整事件。
+
+场景与动画用 Rust 软件光栅化，缓存静态几何和深度，使用两倍分辨率抗锯齿，
+释放 Python GIL 后直接输出 RGB565。`ROBOT_FPS` 是目标帧率，实际流畅度还取决于
+树莓派负载与 SPI 传输速度。Linux AArch64 预编译包同时包含水彩球和机器人，
+兼容系统无需现场编译。升级时若 `display/_watercolor_rust.so` 是旧版本，请用
+`rust/watercolor_renderer/prebuilt/linux-aarch64/_watercolor_rust.so` 覆盖后重启。
+构建环境和兼容要求见该目录的 `BUILD.md`。其他平台先执行
+`bash tools/build_watercolor_rust.sh`；脚本也支持在 macOS 上构建和预览：
+
+```bash
+python tools/preview_robot.py --output /tmp/robot-workstation.gif
+```
+
 ### Rust 水彩球渲染器
 
 水彩模式统一使用 Rust 渲染器；缺少兼容扩展时会明确报错，不再回退到
@@ -186,7 +242,10 @@ Python 只负责字幕排版，不再负责水彩球像素渲染。
 | `WAKE_WORDS` | 唤醒词列表（逗号分隔） | `hey_jarvis` |
 | `LCD_BRIGHTNESS` | LCD 亮度 (0-100) | `100` |
 | `DISPLAY_SCROLL_SPEED` | 文字每帧滚动像素数 | `1.0` |
-| `DISPLAY_UI_STYLE` | LCD 界面：`classic` 或 `watercolor` | `classic` |
+| `DISPLAY_UI_STYLE` | LCD 界面：`classic`、`watercolor` 或 `robot` | `classic` |
+| `ROBOT_FPS` | 机器人目标帧率，1–60 | `30` |
+| `ROBOT_SLEEP_AFTER` | 机器人闲置多久后睡觉（秒，最小 5） | `45` |
+| `ROBOT_EVENTS_ENABLED` | 开启随机起火灭火、雨云撑伞动画 | `true` |
 | `WATERCOLOR_FPS` | 水彩球动画帧率（1-20） | `8` |
 | `WATERCOLOR_DIAMETER` | 水彩球直径像素（100-220） | `168` |
 | `WATERCOLOR_RENDER_SCALE` | 内部渲染比例，越低越省性能（0.2-1.0） | `0.37` |

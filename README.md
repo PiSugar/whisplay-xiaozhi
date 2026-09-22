@@ -149,6 +149,81 @@ speech drives its internal pigment flow.
 Set `BARGE_IN_ENABLED=true` to allow sustained speech to interrupt assistant
 playback. If speaker echo causes false triggers, raise `BARGE_IN_MIN_RMS`.
 
+### 3D robot workstation
+
+![Robot workstation animation preview](assets/robot-workstation.gif)
+
+Set these values in `.env` and restart the app:
+
+```dotenv
+DISPLAY_UI_STYLE=robot
+ROBOT_FPS=30
+ROBOT_SLEEP_AFTER=45
+```
+
+A small isometric voxel workstation sits in the middle of the screen, viewed over
+the robot's right shoulder. The laptop faces the robot with the keyboard within
+reach of its fixed-length articulated arms. The robot
+breathes and occasionally turns toward the viewer, holding eye contact for
+2.5–4.5 seconds with a blink and subtle head movement before turning back.
+Turn timing, speed, and normal blinks vary randomly, with occasional alternating
+foot swings or a 4.3-second stretch while sitting idle: arms rise, the torso leans
+back gently with narrowed eyes, then relaxes. Stretching waits for glances and
+foot swings to finish and yields smoothly to activity. After 45 idle seconds it
+randomly chooses a nap or a pixel arcade game on its laptop. Games last 18–28
+seconds, followed by 35–60 seconds of rest; prolonged idle alternates the two.
+It naps with its left hand on the tabletop and its right arm hanging down.
+Two other random idle gestures turn toward the viewer and wave, or lift the left
+wrist and glance down at its illuminated display. Each lasts about 3.8 seconds,
+does not overlap other idle gestures, and yields smoothly to real activity.
+Connecting, activation, speech, and tool status trigger typing;
+the thinking state raises its right hand to scratch its head while waiting for a
+reply. Listening and photography wake it up. The laptop shows animated decorative terminal
+text. Captured photos appear as edge-to-edge, center-cropped cards above the robot for
+`CAMERA_PREVIEW_SECONDS`. Wi-Fi, battery, captions and caption paging reuse the
+watercolor layout and `WATERCOLOR_CAPTION_*` settings.
+Robot and watercolor modes extract inline `%tool.name...` markers into a separate
+blue tag above captions, including repeat counts. Tool progress does not replace
+captions or reset their paging timer.
+
+A bright, screen-facing sleep “Z” floats well above the head. Hold the button for
+0.65 seconds to orbit the camera 90° around the ground normal with a 0.9-second
+eased transition. Each hold rotates once; four holds return to the original view.
+Short-press wake and double-click photography remain available.
+While typing, the head gently scans the screen. Random short thinking and drinking
+breaks (reach, lift, sip, replace) interrupt typing without changing voice state;
+actual listening, thinking and emergency events take priority.
+
+Occasional cosmetic events are enabled by default: a smoking laptop catches fire,
+then the startled robot turns and bends to retrieve a red extinguisher from under
+its chair, aims a visible foam jet at the fire and puts the cylinder back.
+In rain it looks up, flinches and shields its head before fetching an umbrella;
+the canopy stays centered above its head while the other hand resumes typing.
+The scenes last about 13 and 16 seconds, never overlap, and restore the normal pose afterward.
+The first event starts after 18–35 eligible awake seconds, followed by 40–90 second
+gaps. Sleeping pauses scheduling; listening, thinking, tool status and photo previews
+fade out an active event within about 0.45 seconds. Set `ROBOT_EVENTS_ENABLED=false`
+to disable them. They do not change conversation or audio state.
+
+![Random workstation events](assets/robot-events.gif)
+
+Preview both complete events with
+`python tools/preview_robot.py --events --output /tmp/robot-events.gif`.
+
+Rust handles geometry, animation, depth buffering, 2x supersampling, and RGB565
+output with the Python GIL released. Static scene pixels and depth are cached.
+`ROBOT_FPS` is a target; actual frame rate depends on Pi load and SPI bandwidth.
+The Linux AArch64 prebuilt includes both watercolor and robot renderers; compatible
+systems need no on-device build. When upgrading an older deployed extension,
+copy `rust/watercolor_renderer/prebuilt/linux-aarch64/_watercolor_rust.so` over
+`display/_watercolor_rust.so` and restart. See `BUILD.md` alongside the prebuilt
+for build provenance and compatibility. On other platforms, first run
+`bash tools/build_watercolor_rust.sh`. The script also supports macOS previews:
+
+```bash
+python tools/preview_robot.py --output /tmp/robot-workstation.gif
+```
+
 ### Rust watercolor renderer
 
 Watercolor mode always uses the Rust renderer and fails clearly when a
@@ -191,7 +266,10 @@ only for caption layout and never for orb pixel rendering.
 | `WAKE_WORDS` | Wake words (comma-separated) | `hey_jarvis` |
 | `LCD_BRIGHTNESS` | LCD brightness (0-100) | `100` |
 | `DISPLAY_SCROLL_SPEED` | Text scroll pixels per rendered frame | `1.0` |
-| `DISPLAY_UI_STYLE` | LCD UI: `classic` or `watercolor` | `classic` |
+| `DISPLAY_UI_STYLE` | LCD UI: `classic`, `watercolor`, or `robot` | `classic` |
+| `ROBOT_FPS` | Robot target frame rate, 1–60 | `30` |
+| `ROBOT_SLEEP_AFTER` | Idle seconds before the robot sleeps, minimum 5 | `45` |
+| `ROBOT_EVENTS_ENABLED` | Random fire/extinguisher and rain/umbrella scenes | `true` |
 | `WATERCOLOR_FPS` | Watercolor animation FPS (1-20) | `8` |
 | `WATERCOLOR_DIAMETER` | Orb diameter in pixels (100-220) | `168` |
 | `WATERCOLOR_RENDER_SCALE` | Internal render scale; lower is faster (0.2-1.0) | `0.37` |

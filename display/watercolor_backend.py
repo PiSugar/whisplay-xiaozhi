@@ -13,13 +13,13 @@ from display.watercolor_orb import OrbRenderer as PythonOrbRenderer
 
 log = logging.getLogger("display.watercolor")
 
-def _load_native_renderer():
+def _load_native_renderer(class_name="OrbRenderer"):
     """Load the deployed extension, or the checked-in Linux AArch64 build."""
     try:
-        from display._watercolor_rust import OrbRenderer
+        from display import _watercolor_rust
 
-        return OrbRenderer
-    except ImportError:
+        return getattr(_watercolor_rust, class_name)
+    except (ImportError, AttributeError):
         pass
 
     if platform.system() != "Linux":
@@ -51,7 +51,7 @@ def _load_native_renderer():
             return None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module.OrbRenderer
+        return getattr(module, class_name)
     except (ImportError, OSError, AttributeError):
         log.exception("failed to load prebuilt Rust watercolor renderer: %s", extension)
         return None
@@ -97,6 +97,11 @@ class RustOrbRenderer:
             speech_motion,
             threads,
         )
+        self._init_captions(width, height, diameter, caption_font_path,
+                            caption_font_size, caption_offset_x)
+
+    def _init_captions(self, width, height, diameter, caption_font_path,
+                       caption_font_size, caption_offset_x):
         # Reuse the proven mixed-language caption layout without involving
         # Pillow in the animated orb path. Full RGBA overlays are cached.
         self._captions = PythonOrbRenderer(

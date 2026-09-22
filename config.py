@@ -69,8 +69,11 @@ LCD_BRIGHTNESS = _int("LCD_BRIGHTNESS", "100")
 FONT_PATH = _get("FONT_PATH")
 DISPLAY_SCROLL_SPEED = _float("DISPLAY_SCROLL_SPEED", "1.0")
 DISPLAY_UI_STYLE = _get("DISPLAY_UI_STYLE", "classic").lower()
-if DISPLAY_UI_STYLE not in ("classic", "watercolor"):
+if DISPLAY_UI_STYLE not in ("classic", "watercolor", "robot"):
     DISPLAY_UI_STYLE = "classic"
+ROBOT_FPS = max(1, min(60, _int("ROBOT_FPS", "30")))
+ROBOT_SLEEP_AFTER = max(5.0, _float("ROBOT_SLEEP_AFTER", "45"))
+ROBOT_EVENTS_ENABLED = _bool("ROBOT_EVENTS_ENABLED", "true")
 WATERCOLOR_FPS = max(1, min(20, _int("WATERCOLOR_FPS", "8")))
 WATERCOLOR_DIAMETER = max(100, min(220, _int("WATERCOLOR_DIAMETER", "168")))
 WATERCOLOR_RENDER_SCALE = max(

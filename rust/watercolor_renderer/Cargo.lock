@@ -228,5 +228,6 @@ name = "watercolor-rust"
 version = "0.1.0"
 dependencies = [
  "pyo3",
+ "pyo3-build-config",
  "rayon",
 ]
