@@ -316,6 +316,7 @@ pub struct RobotRenderer {
     background: Surface,
     frame: Surface,
     sleep: f32,
+    wake_age: f32,
     work: f32,
     think: f32,
     gestures: IdleGestures,
@@ -351,6 +352,7 @@ impl RobotRenderer {
             frame: background.clone(),
             background,
             sleep: 0.0,
+            wake_age: 3.0,
             work: 0.0,
             think: 0.0,
             gestures: IdleGestures::new(seed),
@@ -466,10 +468,23 @@ impl RobotRenderer {
             self.frame.orbit = self.background.orbit;
         }
         let wants_sleep = !working && !thinking && idle >= sleep_after;
+        // Only an actual exit from a nap triggers the alarm, never startup or
+        // the automatic nap/game alternation. Keep the sequence frame-rate independent.
+        if !wants_sleep && self.sleep > 0.65 && self.wake_age >= 3.0 {
+            self.wake_age = 0.0;
+        }
+        self.wake_age = (self.wake_age + dt).min(3.0);
+        let wake = self.wake_age < 3.0;
+        let smooth = |v: f32| {
+            let v = v.clamp(0.0, 1.0);
+            v * v * (3.0 - 2.0 * v)
+        };
+        let surprise =
+            smooth((self.wake_age - 0.18) / 0.16) * (1.0 - smooth((self.wake_age - 0.85) / 1.1));
         self.events.update(
             dt,
-            !wants_sleep && !thinking && self.effects_allowed && self.sleep < 0.05,
-            thinking || !self.effects_allowed,
+            !wake && !wants_sleep && !thinking && self.effects_allowed && self.sleep < 0.05,
+            wake || thinking || !self.effects_allowed,
         );
         let event = self.events.frame();
         let pose = event.map_or(0.0, |e| e.pose());
@@ -482,15 +497,20 @@ impl RobotRenderer {
         let asleep = wants_sleep && event.is_none() && !gaming;
         self.work_gestures.update(
             dt,
-            working && !thinking && event.is_none() && self.sleep < 0.05,
+            !wake && working && !thinking && event.is_none() && self.sleep < 0.05,
         );
-        self.sleep += ((asleep as u8 as f32) - self.sleep) * (1.0 - (-dt * 3.0).exp());
+        let sleep_rate = if wake && self.wake_age > 0.18 {
+            11.0
+        } else {
+            3.0
+        };
+        self.sleep += ((asleep as u8 as f32) - self.sleep) * (1.0 - (-dt * sleep_rate).exp());
         self.work += ((((working || rain_work || gaming) && !thinking) as u8 as f32) - self.work)
             * (1.0 - (-dt * 7.0).exp());
         self.think += ((thinking as u8 as f32) - self.think) * (1.0 - (-dt * 5.0).exp());
         self.gestures.update(
             dt,
-            !working && !thinking && !wants_sleep && self.sleep < 0.05 && event.is_none(),
+            !wake && !working && !thinking && !wants_sleep && self.sleep < 0.05 && event.is_none(),
         );
         self.frame.pixels.copy_from_slice(&self.background.pixels);
         self.frame.depth.copy_from_slice(&self.background.depth);
@@ -514,7 +534,8 @@ impl RobotRenderer {
         } else {
             0.0
         };
-        let work = self.work * (1.0 - sleep) * (1.0 - busy_pose) * (1.0 - routine);
+        let work =
+            self.work * (1.0 - surprise) * (1.0 - sleep) * (1.0 - busy_pose) * (1.0 - routine);
         let think = self.think.max(if self.work_gestures.kind == 1 {
             routine
         } else {
@@ -542,6 +563,8 @@ impl RobotRenderer {
             1.10 + sleep * 0.10 + breath + stretch * 0.06,
             -0.51 - sleep * 0.04,
         ];
+        body[1] += surprise * (0.13 + (self.wake_age * 35.0).sin() * 0.025);
+        body[2] -= surprise * 0.10;
         let body_yaw = reaction.as_ref().map_or(0.0, |r| r.body_yaw * pose);
         let body_pitch =
             sleep * 0.62 - stretch * 0.18 + reaction.as_ref().map_or(0.0, |r| r.body_pitch * pose);
@@ -582,6 +605,8 @@ impl RobotRenderer {
             - stretch * 0.26;
         pitch += (-0.25 - pitch) * wave;
         pitch += (0.48 - pitch) * watch;
+        yaw += (camera_heading * 0.7 - yaw) * surprise;
+        pitch += (-0.20 - pitch) * surprise;
         let mut head = [
             0.35,
             1.90 - sleep * 0.11 + (sleep * std::f32::consts::PI).sin() * 0.12 - think * 0.05
@@ -589,7 +614,12 @@ impl RobotRenderer {
                 - stretch * 0.04,
             -0.48 + sleep * 0.70 - stretch * 0.08,
         ];
-        let alarm = reaction.as_ref().map_or(0.0, |r| r.alarm * pose);
+        head[1] += surprise * 0.17;
+        head[2] -= surprise * 0.10;
+        let alarm = reaction
+            .as_ref()
+            .map_or(0.0, |r| r.alarm * pose)
+            .max(surprise);
         if let Some(r) = &reaction {
             for c in 0..3 {
                 head[c] += r.head[c] * pose;
@@ -702,6 +732,10 @@ impl RobotRenderer {
                     hand[c] += (target[c] - hand[c]) * pose;
                 }
             }
+            let startled = [0.35 + side * 0.70, 1.78, -0.60];
+            for c in 0..3 {
+                hand[c] += (startled[c] - hand[c]) * surprise;
+            }
             let (elbow, hand) = arm_pose_lift(
                 shoulder,
                 hand,
@@ -792,6 +826,9 @@ impl RobotRenderer {
             s.block([0.08, 1.44, 0.806], [0.07, 0.025, 0.006], [125, 231, 223]);
         }
         events::draw(s, event, hands, head);
+        if wake {
+            draw_wake_horn(s, self.wake_age);
+        }
         if sleep > 0.8 {
             let lift = (t * 0.35).fract();
             // Screen-facing glyph high above the head, readable from every orbit.
@@ -841,6 +878,55 @@ impl RobotRenderer {
             }
         }
         packed
+    }
+}
+
+fn draw_wake_horn(s: &mut Surface, age: f32) {
+    let smooth = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        v * v * (3.0 - 2.0 * v)
+    };
+    let visible = smooth(age / 0.20) * (1.0 - smooth((age - 2.1) / 0.9));
+    let origin = [
+        1.25 + (1.0 - visible) * 6.0,
+        3.35 + (age * 18.0).sin() * 0.025,
+        -0.65,
+    ];
+    // Voxel megaphone, flared mouth pointing toward the robot, with a grip.
+    for (x, size, color) in [
+        (0.20, 0.20, [241, 157, 47]),
+        (0.02, 0.30, [241, 178, 65]),
+        (-0.16, 0.46, [250, 209, 103]),
+        (-0.24, 0.35, [37, 53, 66]),
+    ] {
+        s.block(
+            [origin[0] + x * 1.4, origin[1], origin[2]],
+            [0.18, size * 1.4, size * 1.4],
+            color,
+        );
+    }
+    s.block(
+        [origin[0] + 0.24, origin[1] - 0.32, origin[2]],
+        [0.15, 0.39, 0.18],
+        [221, 126, 39],
+    );
+    if age > 0.18 && age < 2.1 {
+        for ring in 0..3 {
+            let phase = (age * 2.5 + ring as f32 / 3.0).fract();
+            let radius = 0.25 + phase * 0.40;
+            for segment in 0..18 {
+                let angle = segment as f32 / 17.0 * std::f32::consts::PI;
+                s.block(
+                    [
+                        origin[0] - 0.49 - phase * 0.70,
+                        origin[1] + angle.cos() * radius,
+                        origin[2] - angle.sin() * radius,
+                    ],
+                    [0.07; 3],
+                    [136, 217, 250],
+                );
+            }
+        }
     }
 }
 
@@ -938,6 +1024,27 @@ mod tests {
         }
         assert!(!r.pastime.gaming && r.game < 0.01 && r.work > 0.99);
     }
+    #[test]
+    fn wake_alarm_runs_once_and_not_on_startup() {
+        let mut r = RobotRenderer::new(240, 280, Some(7)).unwrap();
+        r.render(0.0, false, 0.0, 45.0, None, false);
+        assert_eq!(r.wake_age, 3.0);
+        r.sleep = 1.0;
+        r.render(0.033, false, 0.0, 45.0, None, false);
+        assert!(r.wake_age < 0.04);
+        for i in 2..110 {
+            r.render(i as f32 / 30.0, false, 0.0, 45.0, None, false);
+        }
+        assert_eq!(r.wake_age, 3.0);
+        assert!(r.sleep < 0.01);
+        r.sleep = 1.0;
+        r.render(4.0, false, 60.0, 45.0, None, false);
+        assert_eq!(
+            r.wake_age, 3.0,
+            "idle nap transitions must not ring the horn"
+        );
+    }
+
     #[test]
     fn sleep_clears_desk_and_drink_reach_keeps_arm_lengths() {
         for i in 0..=100 {

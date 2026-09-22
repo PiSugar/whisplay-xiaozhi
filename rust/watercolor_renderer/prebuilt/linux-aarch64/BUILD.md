@@ -5,7 +5,14 @@
 - Generic AArch64 target (no `target-cpu=native`); PyO3 stable ABI, Python 3.9+.
 - Requires glibc 2.35 or newer (highest GLIBC symbol version in this binary).
 - Exports `OrbRenderer` and `RobotRenderer` from the same `_watercolor_rust` module.
-- SHA-256: `4f7c9d06adc03b15992ab53712c0b06b1ec1ed93e47db3bd0cb26ec017511188`.
+- SHA-256: `b01f19a51fb232df06bd217e058901c8b02431fe1711bdb3be35842987d9a13f`.
+- Rebuilt 2026-09-22 on CM5 with a three-second nap wake transition: sliding
+  megaphone, expanding blue sound waves, startled head/torso and raised hands.
+  Cosmetic only (no added audio); does not trigger at startup or during idle
+  nap/game alternation. All 20 Rust tests passed on CM5.
+  On `.175`, 16 robot integration tests passed; native sleep/wake playback through
+  the daemon framebuffer at a 30 FPS target had render/write p95 of 11.27 ms
+  (without caption compositing).
 - Rebuilt 2026-09-22 on the same CM5: idle arcade gaming alternates with naps,
   yields to real activity, and uses the laptop screen and existing fixed-length arms.
 - Adds random viewer-facing waves and left-wrist display checks, mutually exclusive
