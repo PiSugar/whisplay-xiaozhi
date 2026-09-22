@@ -6,6 +6,8 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyBytes};
 
 #[path = "robot_events.rs"]
 mod events;
+#[path = "robot_room.rs"]
+mod room;
 use events::{Events, Kind};
 
 type V = [f32; 3];
@@ -66,9 +68,29 @@ impl Surface {
         let depth_u = a[2] - c[2];
         let depth_v = b[2] - c[2];
         for y in y0..y1 {
-            let mut u = edge(b, c, x0 as f32 + 0.5, y as f32 + 0.5) * inverse_area;
-            let mut v = edge(c, a, x0 as f32 + 0.5, y as f32 + 0.5) * inverse_area;
-            for x in x0..x1 {
+            // Large room walls cover only part of their bounding rectangles.
+            // Clip each scanline to edge intersections before depth testing.
+            let scan_y = y as f32 + 0.5;
+            let mut left = f32::INFINITY;
+            let mut right = f32::NEG_INFINITY;
+            for (p, q) in [(a, b), (b, c), (c, a)] {
+                if (q[1] - p[1]).abs() > 0.00001
+                    && scan_y >= p[1].min(q[1])
+                    && scan_y <= p[1].max(q[1])
+                {
+                    let x = p[0] + (scan_y - p[1]) * (q[0] - p[0]) / (q[1] - p[1]);
+                    left = left.min(x);
+                    right = right.max(x);
+                }
+            }
+            if left > right {
+                continue;
+            }
+            let start = x0.max((left - 1.0).max(0.0) as usize);
+            let end = x1.min((right + 1.0).ceil().max(0.0) as usize);
+            let mut u = edge(b, c, start as f32 + 0.5, scan_y) * inverse_area;
+            let mut v = edge(c, a, start as f32 + 0.5, scan_y) * inverse_area;
+            for x in start..end {
                 let w = 1.0 - u - v;
                 if u >= -0.00001 && v >= -0.00001 && w >= -0.00001 {
                     let z = c[2] + depth_u * u + depth_v * v;
@@ -235,6 +257,7 @@ fn arm_pose_lift(shoulder: V, target: V, side: f32, lift: f32) -> (V, V) {
 }
 
 fn static_scene(s: &mut Surface) {
+    room::draw(s);
     // One cut-out map tile, with exposed soil strata and a tiled office floor.
     s.block([0.0, -0.20, 0.0], [3.7, 0.35, 3.15], [82, 69, 62]);
     s.block([0.0, -0.035, 0.0], [3.76, 0.10, 3.21], [132, 147, 129]);

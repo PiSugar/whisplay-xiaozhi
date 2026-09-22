@@ -161,7 +161,10 @@ ROBOT_FPS=30
 ROBOT_SLEEP_AFTER=45
 ```
 
-A small isometric voxel workstation sits in the middle of the screen, viewed over
+A small isometric voxel workstation sits in the middle of the screen, inside
+an open cutaway room with wood flooring, windows, bookshelves and a pinboard.
+Only the two far walls and their attached furnishings render for the current camera
+heading, keeping the robot unobstructed through camera rotations. The default view is over
 the robot's right shoulder. The laptop faces the robot with the keyboard within
 reach of its fixed-length articulated arms. The robot
 breathes and occasionally turns toward the viewer, holding eye contact for

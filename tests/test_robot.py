@@ -209,8 +209,17 @@ class NativeRobotTests(unittest.TestCase):
         self.assertNotEqual(a, b)
         p = np.frombuffer(a, dtype=">u2").reshape(280, 240)
         self.assertTrue(np.any(p[85:215]))
-        self.assertFalse(np.any(p[:84]))
-        self.assertFalse(np.any(p[220:]))
+        # Room walls extend above the former isolated desk; keep the status
+        # icons and bottom caption strip clear, including during camera orbit.
+        self.assertFalse(np.any(p[:28]))
+        self.assertFalse(np.any(p[232:]))
+        for _ in range(4):
+            r.rotate_view()
+            for i in range(30):
+                b = r.rgb565(8.0 + _ + i / 30, False, 0.0, effects_allowed=False)
+                p = np.frombuffer(b, dtype=">u2").reshape(280, 240)
+                self.assertFalse(np.any(p[:28]))
+                self.assertFalse(np.any(p[232:]))
 
     def test_sleep_then_wake_produces_different_pose(self):
         r = NativeRobotRenderer()

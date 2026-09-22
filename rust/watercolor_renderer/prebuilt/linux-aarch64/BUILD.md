@@ -5,7 +5,15 @@
 - Generic AArch64 target (no `target-cpu=native`); PyO3 stable ABI, Python 3.9+.
 - Requires glibc 2.35 or newer (highest GLIBC symbol version in this binary).
 - Exports `OrbRenderer` and `RobotRenderer` from the same `_watercolor_rust` module.
-- SHA-256: `b01f19a51fb232df06bd217e058901c8b02431fe1711bdb3be35842987d9a13f`.
+- SHA-256: `b3176cef5bf626ddbf6433c359faa43af7240b367910ec4b5f8c6b381a471727`.
+- Rebuilt 2026-09-22 on CM5 with a cutaway room: wood flooring, windows,
+  bookcases, wall shelves and pinboards. Inverse-rotated camera direction selects
+  exactly two far walls and their attached decor; near walls are omitted.
+  All room geometry shares the static-scene cache. All 21 Rust tests passed,
+  including a complete 360-degree far-wall selection check.
+  Scanline clipping skips empty parts of triangle bounding boxes. On `.175`,
+  native framebuffer playback with four quarter-turns improved from 26.8 FPS
+  (render/write p95 47.43 ms) to 29.9 FPS (p95 26.12 ms), without captions.
 - Rebuilt 2026-09-22 on CM5 with a three-second nap wake transition: sliding
   megaphone, expanding blue sound waves, startled head/torso and raised hands.
   Cosmetic only (no added audio); does not trigger at startup or during idle
