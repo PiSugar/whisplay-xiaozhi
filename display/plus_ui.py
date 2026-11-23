@@ -814,7 +814,7 @@ class WhisplayPlusUI:
                 self._content.set_visible_child_name("conversation")
             self._shown_photo = photo
         self._emoji.set_visible(landscape or self._content.get_visible_child_name() == "conversation")
-        self.canvas.refresh(snap["activity"], snap["status"])
+        self.canvas.refresh(snap["activity"], snap["status"], width, height)
 
     def update(self, **kwargs):
         # Listening is shown in the status and action labels. Keep the last

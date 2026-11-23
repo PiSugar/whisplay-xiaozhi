@@ -1,6 +1,7 @@
 """Slide-out drawing surface for the Whisplay Plus chat interface."""
 
 import time
+from functools import cache
 
 from canvas.render import render_canvas
 from canvas.scene import CanvasScene
@@ -22,6 +23,32 @@ CANVAS_CSS = b"""
 """
 
 
+@cache
+def _paper_type(Gtk):
+    from gi.repository import Graphene
+
+    class CanvasPaper(Gtk.Widget):
+        """Present the paper texture without using it as a layout size request."""
+
+        def __init__(self):
+            super().__init__(hexpand=True, vexpand=True)
+            self._texture = None
+
+        def set_texture(self, texture):
+            self._texture = texture
+            self.queue_draw()
+
+        def do_snapshot(self, snapshot):
+            texture = self._texture
+            if texture is not None:
+                bounds = Graphene.Rect()
+                bounds.init(0, 0, min(self.get_width(), texture.get_width()),
+                            min(self.get_height(), texture.get_height()))
+                snapshot.append_texture(texture, bounds)
+
+    return CanvasPaper
+
+
 class PlusCanvas:
     def __init__(self, Gtk, texture, on_talk, on_select):
         self.scene = CanvasScene()
@@ -31,6 +58,7 @@ class PlusCanvas:
         self._snapshot = None
         self._frame_at = 0.0
         self._progress = None
+        self._viewport_size = (0, 0)
         self.caption = ""
 
         self.widget = Gtk.Revealer(
@@ -57,7 +85,7 @@ class PlusCanvas:
         panel.append(toolbar)
 
         paper = Gtk.Overlay(vexpand=True, hexpand=True, margin_start=12, margin_end=12)
-        self._picture = Gtk.Picture(can_shrink=True, content_fit=Gtk.ContentFit.FILL)
+        self._picture = _paper_type(Gtk)()
         paper.set_child(self._picture)
         gesture = Gtk.GestureClick(button=1)
         gesture.connect("released", self._select_point)
@@ -104,21 +132,30 @@ class PlusCanvas:
             self.widget.set_visible(False)
 
     def _select_point(self, _gesture, count, x, y):
-        if count != 1 or not self.is_open:
-            return
-        width, height = self._picture.get_width(), self._picture.get_height()
-        if 0 <= x < width and 0 <= y < height:
+        size = self._paper_size()
+        if count == 1 and size and 0 <= x < size[0] and 0 <= y < size[1]:
+            width, height = size
             self.scene.configure(width, height)
             self.scene.select(x, y)
             self._on_select()
 
-    def refresh(self, activity, status):
-        if not self.is_open:
-            return
+    def _paper_size(self):
+        if not self.is_open or not self.widget.get_child_revealed():
+            return None
         width, height = self._picture.get_width(), self._picture.get_height()
-        if width <= 0 or height <= 0:
+        # Gtk.Revealer can temporarily allocate a much larger child while
+        # sliding it in. Never use those allocations to size a bitmap.
+        viewport_width, viewport_height = self._viewport_size
+        if 0 < width <= viewport_width and 0 < height <= viewport_height:
+            return width, height
+        return None
+
+    def refresh(self, activity, status, viewport_width, viewport_height):
+        self._viewport_size = viewport_width, viewport_height
+        size = self._paper_size()
+        if size is None:
             return
-        self.scene.configure(width, height)
+        self.scene.configure(*size)
         revision = self.scene.revision
         now = time.monotonic()
         changed = revision != self._revision
@@ -128,7 +165,7 @@ class PlusCanvas:
                 self._revision = revision
                 self._prompt.set_visible(self._snapshot["selected"] is None)
             image, self._progress = render_canvas(self._snapshot, now)
-            self._picture.set_paintable(self._texture(image))
+            self._picture.set_texture(self._texture(image))
             self._frame_at = now
 
         if self._progress is not None:
