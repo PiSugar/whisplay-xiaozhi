@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 import config
+from canvas.scene import DRAW_TOOL_DESCRIPTION, DRAW_TOOL_SCHEMA
 from hardware.battery import BatteryMonitor
 from hardware.network import NetworkMonitor
 from hardware.led_controller import LedController
@@ -246,7 +247,13 @@ class Application:
                 on_exit=self._on_exit_request,
                 speaker=self.speaker,
                 on_camera=self._on_plus_camera if camera_tool_is_enabled() else None,
+                on_canvas_selection=self._on_canvas_selection,
             )
+            scene = self.display.canvas.scene
+            self.mcp.register("self.canvas.draw", scene.draw, description=DRAW_TOOL_DESCRIPTION,
+                              input_schema=DRAW_TOOL_SCHEMA)
+            self.mcp.register("self.canvas.undo", scene.undo, description="Undo the latest canvas drawing.")
+            self.mcp.register("self.canvas.clear", scene.clear, description="Clear the canvas.")
             self.display.update(activity=self._state)
             self.display.start()
         except Exception as exc:
@@ -267,6 +274,10 @@ class Application:
             return
         action = self._capture_user_photo if self._camera_viewfinder else self._enter_camera_viewfinder
         self._camera_capture_task = asyncio.create_task(action())
+
+    def _on_canvas_selection(self):
+        if self._state == self.IDLE:
+            self._on_plus_talk()
 
     def _on_plus_talk(self, *, physical=False):
         if self._running and (self._plus_talk_task is None or self._plus_talk_task.done()):

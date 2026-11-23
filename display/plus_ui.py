@@ -14,6 +14,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 import config
+from display.plus_canvas import CANVAS_CSS, PlusCanvas
 from display.text_utils import ASSETS_DIR, TOOL_TAG_RE, get_emoji_image
 from display.ui_renderer import DisplayState
 
@@ -184,7 +185,7 @@ def _app_surface_type():
 
 
 class WhisplayPlusUI:
-    def __init__(self, output, on_talk, on_exit, speaker, on_camera=None):
+    def __init__(self, output, on_talk, on_exit, speaker, on_camera=None, on_canvas_selection=None):
         import gi
         gi.require_version("Gdk", "4.0")
         gi.require_version("Graphene", "1.0")
@@ -220,7 +221,7 @@ class WhisplayPlusUI:
         self._window.connect("close-request", self._request_exit, on_exit)
 
         provider = Gtk.CssProvider()
-        provider.load_from_data(_CSS)
+        provider.load_from_data(_CSS + CANVAS_CSS)
         Gtk.StyleContext.add_provider_for_display(
             self._window.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
@@ -314,6 +315,10 @@ class WhisplayPlusUI:
         self._talk.add_css_class("plus-action")
         self._talk.connect("clicked", lambda *_: on_talk())
         actions.append(self._talk)
+        self.canvas = PlusCanvas(Gtk, self._texture, on_talk, on_canvas_selection or on_talk)
+        self._draw = self._icon_button(self._draw_icon(), "Open canvas")
+        self._draw.connect("clicked", lambda *_: self.canvas.open())
+        actions.append(self._draw)
         self._camera = None
         if on_camera:
             self._camera = self._icon_button(self._camera_icon(), "Open camera")
@@ -323,6 +328,7 @@ class WhisplayPlusUI:
         conversation.append(actions)
 
         overlay.add_overlay(self._build_settings(on_exit))
+        overlay.add_overlay(self.canvas.widget)
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_pressed)
         self._window.add_controller(keys)
@@ -473,6 +479,7 @@ class WhisplayPlusUI:
         self._assistant = None
         # Future chunks of an in-progress reply include its previous prefix.
         self._assistant_offset = self._assistant_length
+        self.canvas.caption = ""
         self._seen_tools.clear()
         self._last_tool = None
         self._text.set_visible(False)
@@ -482,9 +489,13 @@ class WhisplayPlusUI:
         self._close_settings()
 
     def _on_key_pressed(self, _controller, key, _keycode, _state):
-        if key == self._Gdk.KEY_Escape and self._settings.get_visible():
-            self._close_settings()
-            return True
+        if key == self._Gdk.KEY_Escape:
+            if self.canvas.is_open:
+                self.canvas.close()
+                return True
+            if self._settings.get_visible():
+                self._close_settings()
+                return True
         return False
 
     def _show_exit_confirmation(self, _button):
@@ -553,6 +564,18 @@ class WhisplayPlusUI:
         draw.ellipse((33, 39, 63, 69), outline=color, width=7)
         return self._texture(image.resize((22, 22), Image.Resampling.LANCZOS))
 
+    def _draw_icon(self):
+        image = Image.new("RGBA", (96, 96))
+        draw = ImageDraw.Draw(image)
+        color = "#e7edf5"
+        draw.line(
+            [(15, 80), (21, 57), (59, 19), (77, 37), (39, 75), (15, 80)],
+            fill=color, width=7, joint="curve",
+        )
+        draw.line([(51, 27), (69, 45)], fill=color, width=6)
+        draw.line([(21, 57), (39, 75)], fill=color, width=6)
+        return self._texture(image.resize((22, 22), Image.Resampling.LANCZOS))
+
     def _text_label(self, text="", style="plus-text"):
         label = self._Gtk.Label(label=text, xalign=0, wrap=True)
         label.set_wrap_mode(self._wrap_mode)
@@ -585,6 +608,7 @@ class WhisplayPlusUI:
         self._assistant = None
         self._assistant_length = 0
         self._assistant_offset = 0
+        self.canvas.caption = ""
 
     def _append_tool(self, name):
         self._seen_tools[name.casefold()] += 1
@@ -603,9 +627,11 @@ class WhisplayPlusUI:
 
     def _set_assistant(self, text):
         self._assistant_length = len(text)
+        text = text[self._assistant_offset:]
+        self.canvas.caption = " ".join(TOOL_TAG_RE.sub("", text).split())[-400:]
         remaining_tools = self._seen_tools.copy()
         parts = []
-        for index, value in enumerate(TOOL_TAG_RE.split(text[self._assistant_offset:])):
+        for index, value in enumerate(TOOL_TAG_RE.split(text)):
             if index % 2 == 0:
                 if value.strip():
                     parts.append((value.strip(), 0))
@@ -753,6 +779,7 @@ class WhisplayPlusUI:
                     or snap["battery_color"] != previous.get("battery_color")):
                 self._update_battery(snap["battery_level"], snap["battery_color"])
             activity = snap["activity"]
+            self._draw.set_visible(activity != "camera")
             talk_label = {
                 "activating": "Pairing…", "connecting": "Connecting…",
                 "listening": "Listening…", "speaking": "Interrupt",
@@ -787,6 +814,7 @@ class WhisplayPlusUI:
                 self._content.set_visible_child_name("conversation")
             self._shown_photo = photo
         self._emoji.set_visible(landscape or self._content.get_visible_child_name() == "conversation")
+        self.canvas.refresh(snap["activity"], snap["status"])
 
     def update(self, **kwargs):
         # Listening is shown in the status and action labels. Keep the last

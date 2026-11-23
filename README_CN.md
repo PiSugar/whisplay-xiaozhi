@@ -85,6 +85,8 @@ bash run.sh
 
 在 `.env` 中设置 `XIAOZHI_CAMERA_TOOL_ENABLED=true` 后，连接 USB 摄像头会显示相机按钮。拔出正在取景的摄像头会结束取景，重新插入即可再次打开。多摄像头时可用 `XIAOZHI_USB_CAMERA_DEVICE` 指定稳定的 `/dev/v4l/by-id/` 路径。
 
+点铅笔图标打开画布，轻触画纸选定位置，再说出想画的内容。待机时点选画纸会开始聆听。小智通过 MCP 绘制通用图形，画布会显示绘制进度。工具栏可撤销、清空或返回对话。
+
 界面会随桌面方向调整布局。可以在 Raspberry Pi OS 的屏幕设置里旋转 Plus 屏幕，也可在 Wayland 桌面终端中切换当前会话的方向：
 
 ```bash

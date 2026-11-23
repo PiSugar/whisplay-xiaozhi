@@ -85,6 +85,8 @@ Open the shortcut or run `bash run.sh` from a desktop terminal. Tap **Tap to tal
 
 Set `XIAOZHI_CAMERA_TOOL_ENABLED=true` in `.env` to use the camera. Connecting a USB camera makes the camera button available. Unplugging an active camera closes its viewfinder, and plugging it back in makes it available again. Use `XIAOZHI_USB_CAMERA_DEVICE` with a stable `/dev/v4l/by-id/` path to select a specific camera.
 
+Tap the pencil icon to open the canvas, then tap a position and say what to draw. Tapping the paper while idle starts listening. XiaoZhi draws with generic MCP primitives, and the canvas shows its progress. Use the toolbar to undo, clear, or return to the conversation.
+
 The layout follows the desktop orientation. Rotate the panel in Raspberry Pi OS screen settings, or switch orientation for the current Wayland session from a desktop terminal:
 
 ```bash
