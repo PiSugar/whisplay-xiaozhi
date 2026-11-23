@@ -28,6 +28,9 @@ from hardware.battery import BatteryMonitor
 from hardware.network import NetworkMonitor
 from hardware.led_controller import LedController
 from hardware.whisplay_daemon import create_whisplay_hardware
+from hardware.whisplay_model import detect_plus_output
+from hardware.usb_camera import is_capture_device, usb_camera_device
+from display.plus_ui import WhisplayPlusUI
 from display.ui_renderer import UIRenderer
 from audio.audio_codec import OpusEncoder, OpusDecoder
 from audio.audio_recorder import AudioRecorder
@@ -46,6 +49,7 @@ from protocol.local_command_tool import (
     check_command,
     is_enabled as local_command_is_enabled,
     run_local_command,
+    stop_all_commands,
     stop_command,
 )
 from protocol.web_tools import (
@@ -66,6 +70,7 @@ from protocol.camera_tool import (
     capture_photo,
     configure_vision,
     is_enabled as camera_tool_is_enabled,
+    native_viewfinder_available,
 )
 from protocol.ota_client import OtaClient
 from iot.thing_manager import ThingManager
@@ -95,11 +100,12 @@ class Application:
         # Hardware
         self.board: Any = None
         self.led: LedController | None = None
+        self._plus_button = None
         self.battery = BatteryMonitor()
         self.network = NetworkMonitor()
 
         # Display
-        self.display: UIRenderer | None = None
+        self.display: UIRenderer | WhisplayPlusUI | None = None
 
         # Audio
         self.recorder = AudioRecorder()
@@ -115,7 +121,8 @@ class Application:
 
         # IoT
         self.thing_manager = ThingManager()
-        self.thing_manager.register(Speaker())
+        self.speaker = Speaker()
+        self.thing_manager.register(self.speaker)
 
         # Protocol
         self.ota = OtaClient(
@@ -124,7 +131,7 @@ class Application:
             client_id=config.CLIENT_ID,
         )
         self.client = None  # Set in _activate_and_connect (WebSocket or MQTT)
-        self.mcp = McpHandler()
+        self.mcp = McpHandler(lambda name: self._update_display(tool_name=name))
         if local_command_is_enabled():
             self.mcp.register(
                 "local_command",
@@ -175,6 +182,7 @@ class Application:
         self._reconnecting = False  # Prevent concurrent reconnect storms
         self._reconnect_task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._client_tasks: set[asyncio.Task] = set()
         self._keep_listening = False  # Auto-restart listening after TTS
         self._listen_after_connect = False  # Auto-start listening after reconnect
         self._last_late_ignorable_stt_at = 0.0
@@ -182,11 +190,14 @@ class Application:
         self._terminal_shown_at: float | None = None
         self._button_click_task: asyncio.Task | None = None
         self._button_hold_task: asyncio.Task | None = None
+        self._plus_talk_task: asyncio.Task | None = None
         self._robot_button_down = False
         self._robot_button_rotated = False
         self._robot_second_click = False
         self._camera_viewfinder: CameraViewfinder | None = None
         self._camera_capture_task: asyncio.Task | None = None
+        self._camera_monitor_task: asyncio.Task | None = None
+        self._camera_available = False
         self._pending_photo_for_next_input = False
 
     @property
@@ -207,7 +218,65 @@ class Application:
         self._running = True
         self._loop = asyncio.get_running_loop()
 
-        # Init hardware
+        plus_output = detect_plus_output()
+        if plus_output is not None:
+            self._start_plus(plus_output)
+        else:
+            self._start_spi()
+        if camera_tool_is_enabled():
+            self._camera_monitor_task = asyncio.create_task(self._monitor_cameras())
+
+        await self.battery.start()
+        await self.network.start()
+        asyncio.create_task(self._status_display_loop())
+
+        self._update_display(status="xiaozhi", text="Starting...")
+        await self._activate_and_connect()
+        log.info("application started")
+
+    def _start_plus(self, output: str):
+        log.info("Whisplay Plus detected on %s", output)
+        # The Plus ES8389 playback path requires 48 kHz on Raspberry Pi OS.
+        # SoX converts the decoded mono stream before handing it to ALSA.
+        self.player.alsa_output_format = (48000, 2)
+        try:
+            self.display = WhisplayPlusUI(
+                output,
+                on_talk=self._on_plus_talk,
+                on_exit=self._on_exit_request,
+                speaker=self.speaker,
+                on_camera=self._on_plus_camera if camera_tool_is_enabled() else None,
+            )
+            self.display.update(activity=self._state)
+            self.display.start()
+        except Exception as exc:
+            log.error("Plus UI unavailable; launch from the desktop after running install.sh: %s", exc)
+
+        try:
+            from hardware.plus_button import WhisplayPlusButton
+            self._plus_button = WhisplayPlusButton(
+                lambda: self._on_plus_talk(physical=True)
+            )
+        except Exception as exc:
+            log.warning("Plus physical button unavailable: %s", exc)
+
+    def _on_plus_camera(self):
+        if not self._running:
+            return
+        if self._camera_capture_task and not self._camera_capture_task.done():
+            return
+        action = self._capture_user_photo if self._camera_viewfinder else self._enter_camera_viewfinder
+        self._camera_capture_task = asyncio.create_task(action())
+
+    def _on_plus_talk(self, *, physical=False):
+        if self._running and (self._plus_talk_task is None or self._plus_talk_task.done()):
+            action = self._handle_button_press
+            if physical and self._camera_available:
+                action = self._handle_button_click_event
+            self._plus_talk_task = asyncio.create_task(action())
+
+    def _start_spi(self):
+        # Keep the regular HAT's daemon and standalone SPI paths.
         try:
             self.board = create_whisplay_hardware()
             self.led = LedController(self.board)
@@ -232,21 +301,6 @@ class Application:
             if hasattr(self.board, "on_focus_revoked"):
                 self.board.on_focus_revoked(self._on_focus_revoked)
 
-        # Start battery monitor
-        await self.battery.start()
-        await self.network.start()
-
-        # Status display update loops
-        asyncio.create_task(self._status_display_loop())
-
-        # Update display
-        self._update_display(status="xiaozhi", text="Starting...")
-
-        # Activate (pair) and connect
-        await self._activate_and_connect()
-
-        log.info("application started")
-
     async def stop(self):
         """Shutdown all subsystems."""
         if not self._running:
@@ -254,38 +308,34 @@ class Application:
         self._running = False
         self._keep_listening = False
 
-        # Cancel tasks
-        if self._recording_task:
-            self._recording_task.cancel()
-        if self._receive_task:
-            self._receive_task.cancel()
-        if self._reconnect_task:
-            self._reconnect_task.cancel()
-        if self._terminal_clear_task:
-            self._terminal_clear_task.cancel()
-            self._terminal_clear_task = None
-        if self._button_click_task:
-            self._button_click_task.cancel()
-            self._button_click_task = None
-        if self._button_hold_task:
-            self._button_hold_task.cancel()
-            self._button_hold_task = None
-        if self._camera_capture_task:
-            self._camera_capture_task.cancel()
-            self._camera_capture_task = None
-        if self._camera_viewfinder:
-            await self._camera_viewfinder.stop()
-            self._camera_viewfinder = None
+        if self._plus_button:
+            try:
+                self._plus_button.stop()
+            except Exception:
+                log.exception("failed to release Plus button")
 
-        # Stop components
+        tasks = self._client_tasks | {
+            task for task in (
+                self._recording_task, self._receive_task, self._reconnect_task,
+                self._terminal_clear_task, self._button_click_task, self._button_hold_task,
+                self._camera_capture_task, self._camera_monitor_task, self._plus_talk_task,
+            ) if task is not None
+        }
+        for task in tasks:
+            task.cancel()
         self.recorder.stop()
-        await self.player.stop()
-        if self.client:
-            await self.client.disconnect()
-        await self.battery.stop()
-        await self.network.stop()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-        if self.display:
+        cleanup = [self.player.abort(), self.battery.stop(), self.network.stop(), stop_all_commands()]
+        if self._camera_viewfinder:
+            cleanup.append(self._camera_viewfinder.stop())
+            self._camera_viewfinder = None
+        if self.client:
+            cleanup.append(self.client.disconnect())
+        if isinstance(self.display, WhisplayPlusUI):
+            cleanup.append(self.display.stop())
+
+        if isinstance(self.display, UIRenderer):
             self.display.stop()
         if self.board:
             # In daemon mode, backlight is global and managed by daemon desktop.
@@ -299,6 +349,9 @@ class Application:
             except Exception as e:
                 log.debug("board cleanup during shutdown failed: %s", e)
 
+        for result in await asyncio.gather(*cleanup, return_exceptions=True):
+            if isinstance(result, Exception):
+                log.error("shutdown cleanup failed: %s", result)
         log.info("application stopped")
 
     # ==================== Activation & Connection ====================
@@ -390,17 +443,31 @@ class Application:
 
     def _wire_callbacks(self):
         """Wire protocol callbacks to application handlers."""
-        self.client.on_stt = self._on_stt
-        self.client.on_llm_emotion = self._on_llm_emotion
-        self.client.on_tts_start = self._on_tts_start
-        self.client.on_tts_audio = self._on_tts_audio
-        self.client.on_tts_sentence_start = self._on_tts_sentence_start
-        self.client.on_tts_stop = self._on_tts_stop
-        self.client.on_listen_stop = self._on_listen_stop
-        self.client.on_mcp = self._on_mcp
-        self.client.on_iot = self._on_iot
-        self.client.on_goodbye = self._on_goodbye
-        self.client.on_disconnected = self._on_disconnected
+        # MQTT schedules callbacks outside the receive loop. Track those tasks
+        # too so shutdown cannot leave an active TTS or camera request behind.
+        def track(handler):
+            async def callback(*args):
+                if not self._running:
+                    return
+                task = asyncio.current_task()
+                self._client_tasks.add(task)
+                try:
+                    return await handler(*args)
+                finally:
+                    self._client_tasks.discard(task)
+            return callback
+
+        self.client.on_stt = track(self._on_stt)
+        self.client.on_llm_emotion = track(self._on_llm_emotion)
+        self.client.on_tts_start = track(self._on_tts_start)
+        self.client.on_tts_audio = track(self._on_tts_audio)
+        self.client.on_tts_sentence_start = track(self._on_tts_sentence_start)
+        self.client.on_tts_stop = track(self._on_tts_stop)
+        self.client.on_listen_stop = track(self._on_listen_stop)
+        self.client.on_mcp = track(self._on_mcp)
+        self.client.on_iot = track(self._on_iot)
+        self.client.on_goodbye = track(self._on_goodbye)
+        self.client.on_disconnected = track(self._on_disconnected)
 
     async def _run_activation(self):
         """OTA activation: get verification code, show on screen, poll until paired."""
@@ -655,8 +722,8 @@ class Application:
                 await self._handle_button_click_event()
 
     def _on_exit_request(self):
-        """Daemon requested app exit (e.g. home/exit gesture)."""
-        log.info("exit requested by daemon, shutting down")
+        """Close the desktop window or release the daemon's foreground app."""
+        log.info("exit requested, shutting down")
         os.kill(os.getpid(), signal.SIGTERM)
 
     def _on_focus_revoked(self, _payload=None):
@@ -689,6 +756,37 @@ class Application:
         finally:
             if self._button_click_task is current:
                 self._button_click_task = None
+
+    async def _monitor_cameras(self):
+        native = await asyncio.to_thread(native_viewfinder_available)
+        while self._running:
+            usb = None if config.CAMERA_VIEWFINDER_COMMAND else usb_camera_device()
+            available = native or usb is not None
+            if available != self._camera_available:
+                self._camera_available = available
+                if isinstance(self.display, WhisplayPlusUI):
+                    self.display.set_camera_available(available)
+
+            viewfinder = self._camera_viewfinder
+            if viewfinder is not None and viewfinder.process is not None:
+                disconnected = (
+                    viewfinder.usb_device is not None and not is_capture_device(viewfinder.usb_device)
+                )
+                capture = self._camera_capture_task
+                capturing = capture is not None and not capture.done()
+                if disconnected or (viewfinder.ended and not capturing):
+                    if capturing:
+                        capture.cancel()
+                        await asyncio.gather(capture, return_exceptions=True)
+                        self._camera_capture_task = None
+                    await viewfinder.stop()
+                    self._camera_viewfinder = None
+                    if self.display:
+                        self.display.clear_photo()
+                    self._set_state(self.IDLE)
+                    status = "Camera disconnected" if disconnected else "Viewfinder stopped"
+                    self._update_display(status=status, emoji="❌", text="")
+            await asyncio.sleep(0.5)
 
     async def _enter_camera_viewfinder(self):
         if not camera_tool_is_enabled() or self._camera_viewfinder is not None:
@@ -924,7 +1022,7 @@ class Application:
         # Server recognized speech; stop recording (server VAD triggered)
         await self._stop_listening()
         self._update_display(status="Thinking...", emoji="🤔", activity="thinking")
-        self._update_display(text=f"🗣️ {text}")
+        self._update_display(text=f"🗣️ {text}", user_text=text)
 
     async def _on_llm_emotion(self, emoji: str):
         """Received emotion/emoji from LLM."""
@@ -933,8 +1031,9 @@ class Application:
     async def _on_tts_start(self):
         """TTS playback starting."""
         self._tts_audio_frames = 0
+        self._tts_text_buffer = ""
         self._set_state(self.SPEAKING)
-        self._update_display(status="Speaking...")
+        self._update_display(status="Speaking...", new_assistant=True)
         self.player.start()
         if config.BARGE_IN_ENABLED:
             self._barge_in.reset()
@@ -965,7 +1064,7 @@ class Application:
         if self._state != self.SPEAKING:
             return
         self._tts_text_buffer = self._append_tts_text(self._tts_text_buffer, text)
-        self._update_display(text=self._tts_text_buffer)
+        self._update_display(text=self._tts_text_buffer, assistant_text=self._tts_text_buffer)
 
     def _append_tts_text(self, current: str, text: str) -> str:
         if not current:
@@ -1079,10 +1178,25 @@ class Application:
             self.display.update(**kwargs)
 
     async def _run_local_command_with_display(self, params: dict) -> dict:
+        if isinstance(self.display, WhisplayPlusUI):
+            display = self.display
+            token = display.begin_command()
+
+            def progress(text):
+                display.update_command(token, text)
+
+            try:
+                return await run_local_command(params, output_callback=progress, include_output=True)
+            except Exception as exc:
+                progress(str(exc))
+                progress(None)
+                raise
         return await run_local_command(params, output_callback=self._update_terminal_progress)
 
     async def _check_command_with_display(self, params: dict) -> dict:
         result = await check_command(params)
+        if isinstance(self.display, WhisplayPlusUI):
+            return result
         tail = str(result.get("output_tail", "")).strip()
         status = str(result.get("status", ""))
         job_id = str(result.get("job_id", ""))
@@ -1092,6 +1206,8 @@ class Application:
 
     async def _stop_command_with_display(self, params: dict) -> dict:
         result = await stop_command(params)
+        if isinstance(self.display, WhisplayPlusUI):
+            return result
         tail = str(result.get("output_tail", "")).strip()
         status = str(result.get("status", ""))
         job_id = str(result.get("job_id", ""))
@@ -1138,6 +1254,8 @@ class Application:
             self.display.show_photo(image_path)
 
     def _update_terminal_progress(self, text: str | None):
+        if isinstance(self.display, WhisplayPlusUI):
+            return
         if text is None:
             self._schedule_terminal_clear()
             return

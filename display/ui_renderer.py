@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 import config
 from display.text_utils import (
     image_to_rgb565, wrap_text, draw_mixed_text, get_line_image, clear_line_cache,
-    hex_to_rgb, luminance,
+    hex_to_rgb, luminance, TOOL_TAG_RE as _TOOL_TAG_RE,
 )
 from display.watercolor_backend import create_watercolor_renderer
 from display.robot_backend import RustRobotRenderer
@@ -47,10 +47,6 @@ _WIFI_EXTRA_UP_PX = 1
 _TITLE_OFFSET_Y = -5
 _EMOJI_OFFSET_Y = 10
 _STATUS_ICON_GROUP_DOWN_PX = 5
-_TOOL_TAG_RE = re.compile(
-    r"(?<![A-Za-z0-9_])[%％﹪]\s*([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*)\s*(?:\.\.\.|…)",
-    re.IGNORECASE,
-)
 _TOOL_TAG_BG = (8, 42, 112)
 _TOOL_TAG_FG = (255, 255, 255)
 _TOOL_TAG_COUNT_FG = (122, 205, 255)

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import tempfile
 import unittest
@@ -29,6 +30,37 @@ class _FakeCameraProcess:
 
 
 class CameraToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_capture_reaps_camera_and_removes_partial_photo(self):
+        started = asyncio.Event()
+
+        class CameraProcess(_FakeCameraProcess):
+            returncode = None
+
+            async def communicate(self):
+                if self.returncode is None:
+                    started.set()
+                    await asyncio.Future()
+                return b"", b""
+
+        process = CameraProcess()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            async def fake_subprocess(*args, **kwargs):
+                Path(args[args.index("--output") + 1]).write_bytes(b"partial")
+                return process
+
+            with (
+                patch("protocol.camera_tool._camera_command", return_value="/usr/bin/rpicam-still"),
+                patch("protocol.camera_tool.config.CAMERA_OUTPUT_DIR", temp_dir),
+                patch("protocol.camera_tool.asyncio.create_subprocess_exec", side_effect=fake_subprocess),
+            ):
+                capture = asyncio.create_task(capture_photo({"question": "What is visible?"}))
+                await asyncio.wait_for(started.wait(), timeout=2)
+                capture.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await capture
+            self.assertEqual(process.returncode, -9)
+            self.assertEqual(list(Path(temp_dir).iterdir()), [])
+
     async def test_capture_uploads_photo_and_returns_vision_result(self):
         shown_photos = []
         camera_commands = []

@@ -36,8 +36,9 @@ class Tool:
 class McpHandler:
     """Registry and dispatcher for MCP tool calls."""
 
-    def __init__(self):
+    def __init__(self, on_tool_call: Callable[[str], None] | None = None):
         self._tools: dict[str, Tool] = {}
+        self._on_tool_call = on_tool_call
 
     def register(
         self,
@@ -107,6 +108,11 @@ class McpHandler:
             log.warning("unknown MCP tool: %s", tool_name)
             return rpc_id, {"error": f"Unknown tool: {tool_name}"}
 
+        if self._on_tool_call:
+            try:
+                self._on_tool_call(tool_name)
+            except Exception:
+                log.exception("failed to display tool call %s", tool_name)
         try:
             result = tool.func(arguments)
             if inspect.isawaitable(result):

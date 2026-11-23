@@ -23,6 +23,7 @@ class AudioPlayer:
         self._queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._task: asyncio.Task | None = None
         self._stopping = False
+        self.alsa_output_format: tuple[int, int] | None = None
         self.on_pcm_written: Callable[[bytes], None] | None = None
 
     def start(self):
@@ -54,8 +55,12 @@ class AudioPlayer:
             "-e", "signed-integer",
             "-c", "1",
             "-",
-            "-t", "alsa", config.ALSA_OUTPUT_DEVICE,
+            "-t", "alsa",
         ]
+        if self.alsa_output_format:
+            rate, channels = self.alsa_output_format
+            cmd.extend(["-r", str(rate), "-c", str(channels)])
+        cmd.append(config.ALSA_OUTPUT_DEVICE)
         self._process = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL
         )
@@ -140,11 +145,6 @@ class AudioPlayer:
         self._process = None
         if process:
             try:
-                if process.stdin:
-                    process.stdin.close()
-            except Exception:
-                pass
-            try:
                 process.terminate()
                 await asyncio.wait_for(
                     asyncio.get_running_loop().run_in_executor(None, process.wait),
@@ -153,9 +153,15 @@ class AudioPlayer:
             except Exception:
                 try:
                     process.kill()
-                    process.wait(timeout=0.5)
+                    await asyncio.to_thread(process.wait)
                 except Exception:
                     pass
+            finally:
+                if process.stdin:
+                    try:
+                        await asyncio.to_thread(process.stdin.close)
+                    except OSError:
+                        pass
         self._queue = asyncio.Queue()
         log.info("player aborted")
 

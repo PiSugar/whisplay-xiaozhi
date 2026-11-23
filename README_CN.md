@@ -17,7 +17,8 @@
 - **可配置 LCD UI** — 可选择经典状态/表情界面，或从 `whisplay-chatgpt` 移植的音频响应式水彩球
 - **RGB LED** — 根据状态自动变色（空闲/聆听/思考/回答/错误）
 - **电池监测** — PiSugar 电池电量实时显示
-- **兼容 whisplay-daemon** — 检测到 daemon 时自动切换到 daemon 提供的 framebuffer / 按键 / LED
+- **兼容 whisplay-daemon** — 普通 Whisplay HAT 可使用 daemon 提供的 framebuffer / 按键 / LED
+- **Whisplay Plus 触屏** — 自动识别 Plus 面板，全屏界面适配横屏和竖屏
 - **唤醒词** — 支持 openwakeword 免摆键唤醒
 - **MCP 支持** — 服务端工具调用（JSON-RPC 2.0）
 - **树莓派摄像头** — 通过 MCP 拍照并上传到服务端下发的视觉接口，把分析结果返回给模型
@@ -27,7 +28,7 @@
 | 组件 | 说明 |
 |------|------|
 | 树莓派 | Zero 2W / Pi 4 / Pi 5 |
-| Whisplay HAT | PiSugar Whisplay HAT（LCD + 麦克风 + 扬声器 + RGB LED + 按键） |
+| Whisplay HAT | PiSugar Whisplay HAT 或 Whisplay Plus |
 | PiSugar 电池 | 1200mAh / 5000mAh |
 | WM8960 | 音频编解码器（HAT 自带） |
 | 树莓派摄像头 | `rpicam-still`/`rpicam-vid` 或对应 `libcamera-*` 命令支持的摄像头（可选） |
@@ -75,6 +76,21 @@ bash run.sh
 - **按下按钮** → 唤醒设备，开始自动聆听（服务端 VAD 自动检测语音结束）
 - **回答过程中按下按钮** → 打断当前回答，开始新对话
 - **唤醒词** → 效果同按下按钮（需在配置中启用）
+
+## Whisplay Plus
+
+使用 Raspberry Pi OS Desktop。先安装 Plus 驱动并重启，然后以桌面用户身份运行 `bash install.sh`。安装脚本检测到 Plus 后，会安装触屏 UI 所需的依赖并在桌面创建 **Whisplay 小智** 快捷方式。[Whisplay Plus 驱动](https://github.com/PiSugar/whisplay-plus)
+
+双击快捷方式，或在桌面终端运行 `bash run.sh`，即可打开全屏界面。轻触 **Tap to talk** 或按实体按键开始自动聆听。小智回答时可轻触 **Interrupt** 打断。点右上角的三点菜单调节扬声器音量，或选择 **Exit app** 并确认，退出应用并释放硬件。
+
+在 `.env` 中设置 `XIAOZHI_CAMERA_TOOL_ENABLED=true` 后，连接 USB 摄像头会显示相机按钮。拔出正在取景的摄像头会结束取景，重新插入即可再次打开。多摄像头时可用 `XIAOZHI_USB_CAMERA_DEVICE` 指定稳定的 `/dev/v4l/by-id/` 路径。
+
+界面会随桌面方向调整布局。可以在 Raspberry Pi OS 的屏幕设置里旋转 Plus 屏幕，也可在 Wayland 桌面终端中切换当前会话的方向：
+
+```bash
+bash tools/set-plus-orientation.sh landscape
+bash tools/set-plus-orientation.sh portrait
+```
 
 ## 项目结构
 

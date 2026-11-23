@@ -4,6 +4,7 @@ Adapted from whisplay-chatbot python/utils.py.
 """
 
 import os
+import re
 import unicodedata
 from io import BytesIO
 
@@ -18,6 +19,10 @@ except ImportError:
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
 EMOJI_SVG_DIR = os.path.join(ASSETS_DIR, "emoji_svg")
+TOOL_TAG_RE = re.compile(
+    r"(?<![A-Za-z0-9_])[%％﹪]\s*([A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*)\s*(?:\.\.\.|…)",
+    re.IGNORECASE,
+)
 
 
 # ==================== Color Utils ====================

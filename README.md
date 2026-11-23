@@ -17,7 +17,8 @@ Connects to the [XiaoZhi AI platform](https://xiaozhi.me) using OTA-provided Web
 - **Configurable LCD UI** — classic status/emoji view or the audio-reactive watercolor orb ported from `whisplay-chatgpt`
 - **RGB LED** — Automatic color changes based on state (idle / listening / thinking / speaking / error)
 - **Battery Monitor** — Real-time PiSugar battery level display
-- **whisplay-daemon Ready** — Auto-adapts to daemon framebuffer / button / LED mode when available
+- **whisplay-daemon Ready** — The standard HAT can use the daemon framebuffer, button, and LEDs
+- **Whisplay Plus Touchscreen** — Automatically detects the Plus panel and adapts the fullscreen UI to portrait and landscape
 - **Wake Word** — Hands-free activation via openwakeword
 - **MCP Support** — Server-side tool invocation (JSON-RPC 2.0)
 - **Raspberry Pi Camera** — MCP photo capture uploaded to the server-provided vision service, with its analysis returned to the model
@@ -27,7 +28,7 @@ Connects to the [XiaoZhi AI platform](https://xiaozhi.me) using OTA-provided Web
 | Component | Description |
 |-----------|-------------|
 | Raspberry Pi | Zero 2W / Pi 4 / Pi 5 |
-| Whisplay HAT | PiSugar Whisplay HAT (LCD + mic + speaker + RGB LED + button) |
+| Whisplay HAT | PiSugar Whisplay HAT or Whisplay Plus |
 | PiSugar Battery | 1200mAh / 5000mAh |
 | WM8960 | Audio codec (built into HAT) |
 | Raspberry Pi Camera | Camera supported by `rpicam-still`/`rpicam-vid` or their `libcamera-*` equivalents (optional) |
@@ -75,6 +76,21 @@ Credentials are saved locally — subsequent boots skip the pairing step.
 - **Press button** → Device wakes up and starts listening (auto-stop via server VAD)
 - **Press button during response** → Interrupts current response and starts a new conversation
 - **Wake word** → Same as button press (if enabled)
+
+## Whisplay Plus
+
+Use Raspberry Pi OS Desktop. Install the driver and reboot, then run `bash install.sh` as the desktop user. When the installer detects the Plus panel, it installs the touchscreen UI dependencies and adds a **Whisplay XiaoZhi** desktop shortcut. [Whisplay Plus driver](https://github.com/PiSugar/whisplay-plus)
+
+Open the shortcut or run `bash run.sh` from a desktop terminal. Tap **Tap to talk** or press the physical button to start automatic listening. Tap **Interrupt** while XiaoZhi is speaking to start a new turn. Open the three-dot menu to adjust speaker volume, or select **Exit app** and confirm to close the app and release its hardware.
+
+Set `XIAOZHI_CAMERA_TOOL_ENABLED=true` in `.env` to use the camera. Connecting a USB camera makes the camera button available. Unplugging an active camera closes its viewfinder, and plugging it back in makes it available again. Use `XIAOZHI_USB_CAMERA_DEVICE` with a stable `/dev/v4l/by-id/` path to select a specific camera.
+
+The layout follows the desktop orientation. Rotate the panel in Raspberry Pi OS screen settings, or switch orientation for the current Wayland session from a desktop terminal:
+
+```bash
+bash tools/set-plus-orientation.sh landscape
+bash tools/set-plus-orientation.sh portrait
+```
 
 ## Project Structure
 

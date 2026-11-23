@@ -61,14 +61,24 @@ sudo apt-get update
 sudo apt-get install -y \
     python3 python3-venv python3-pip \
     python3-lgpio \
-    sox libsox-fmt-all \
+    sox libsox-fmt-all ffmpeg \
     libopus0 libopus-dev \
     libcairo2-dev libgirepository1.0-dev \
     cargo rustc \
     unzip
 
+PLUS_DETECTED=false
+VENV_PYTHON=python3
+VENV_OPTIONS=()
+if python3 -m hardware.whisplay_model >/dev/null; then
+    PLUS_DETECTED=true
+    echo "=== Installing Whisplay Plus desktop dependencies ==="
+    sudo apt-get install -y python3-gi gir1.2-gtk-4.0 fonts-noto-cjk fonts-noto-color-emoji wlr-randr
+    VENV_PYTHON=/usr/bin/python3
+    VENV_OPTIONS+=(--system-site-packages)
+fi
 echo "=== Creating Python virtual environment ==="
-python3 -m venv venv
+"$VENV_PYTHON" -m venv "${VENV_OPTIONS[@]}" venv
 source venv/bin/activate
 
 echo "=== Installing Python packages ==="
@@ -142,8 +152,16 @@ else
     echo ".env already exists, skipping"
 fi
 
-register_daemon_app
+if [ "$PLUS_DETECTED" = true ]; then
+    python3 tools/install-plus-shortcut.py
+else
+    register_daemon_app
+fi
 
 echo "=== Done ==="
-echo "Run: bash run.sh"
+if [ "$PLUS_DETECTED" = true ]; then
+    echo "Open Whisplay XiaoZhi from the desktop, or run bash run.sh in a desktop terminal."
+else
+    echo "Run: bash run.sh"
+fi
 echo "On first boot, the LCD will show a verification code — enter it on xiaozhi.me to pair."

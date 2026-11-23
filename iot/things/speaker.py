@@ -73,6 +73,7 @@ class Speaker(Thing):
         super().__init__("Speaker", "板载扬声器，支持音量调节")
         self._card = _find_card()
         self._control = _find_control(self._card)
+        self._volume_lock = asyncio.Lock()
         log.info("using amixer card=%s control=%s", self._card or "default", self._control)
 
         self.add_property("volume", "当前音量 (0-100)", self._get_volume)
@@ -97,43 +98,39 @@ class Speaker(Thing):
         return cmd
 
     async def _get_volume(self) -> int:
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._read_volume)
+        try:
+            return await self.get_volume()
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            log.warning("read volume failed: %s", exc)
+            return 50
 
     async def _set_volume(self, params) -> dict:
-        level = int(params["volume"].get_value())
-        level = max(0, min(100, level))
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._write_volume, level)
-        log.info("volume set to %d%%", level)
+        level = await self.set_volume(int(params["volume"].get_value()))
         return {"status": "success", "volume": level}
+
+    async def get_volume(self) -> int:
+        async with self._volume_lock:
+            return await asyncio.to_thread(self._read_volume)
+
+    async def set_volume(self, level: int) -> int:
+        level = max(0, min(100, level))
+        async with self._volume_lock:
+            await asyncio.to_thread(self._write_volume, level)
+        log.info("volume set to %d%%", level)
+        return level
 
     # ---- sync helpers (run in executor) ----
 
     def _read_volume(self) -> int:
-        try:
-            command = self._amixer_cmd("cget", self._control) if self._control.startswith("name=") else self._amixer_cmd("sget", self._control)
-            r = subprocess.run(
-                command,
-                capture_output=True, text=True, timeout=5,
-            )
-            if r.returncode == 0:
-                m = re.search(r":\s*values=(\d+)", r.stdout)
-                if m:
-                    return int(m.group(1))
-                m = re.search(r"\[(\d+)%\]", r.stdout)
-                if m:
-                    return int(m.group(1))
-        except Exception as e:
-            log.warning("read volume failed: %s", e)
-        return 50  # fallback
+        verb = "cget" if self._control.startswith("name=") else "sget"
+        result = subprocess.run(self._amixer_cmd(verb, self._control),
+                                capture_output=True, text=True, timeout=5, check=True)
+        match = re.search(r":\s*values=(\d+)|\[(\d+)%\]", result.stdout)
+        if not match:
+            raise ValueError("amixer returned no volume value")
+        return max(0, min(100, int(match.group(1) or match.group(2))))
 
     def _write_volume(self, level: int):
-        try:
-            command = self._amixer_cmd("cset", self._control, str(level)) if self._control.startswith("name=") else self._amixer_cmd("sset", self._control, f"{level}%")
-            subprocess.run(
-                command,
-                capture_output=True, timeout=5,
-            )
-        except Exception as e:
-            log.warning("set volume failed: %s", e)
+        verb, value = ("cset", str(level)) if self._control.startswith("name=") else ("sset", f"{level}%")
+        subprocess.run(self._amixer_cmd(verb, self._control, value),
+                       capture_output=True, timeout=5, check=True)

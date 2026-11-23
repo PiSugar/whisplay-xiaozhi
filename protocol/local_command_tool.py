@@ -6,7 +6,9 @@ Runs allowlisted local commands for XiaoZhi tool calls without invoking a shell.
 
 import asyncio
 import logging
+import os
 import shlex
+import signal
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -76,6 +78,7 @@ class CommandJob:
     command: str
     proc: asyncio.subprocess.Process
     output_callback: OutputCallback | None
+    include_output: bool = False
     started_at: float = field(default_factory=time.time)
     stdout_chunks: list[bytes] = field(default_factory=list)
     stderr_chunks: list[bytes] = field(default_factory=list)
@@ -88,6 +91,35 @@ class CommandJob:
 
 
 _JOBS: dict[str, CommandJob] = {}
+
+
+async def _stop_job(job: CommandJob):
+    job.status = "stopped"
+
+    def signal_group(sig):
+        try:
+            os.killpg(job.proc.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    signal_group(signal.SIGTERM)
+    finished = asyncio.gather(job.proc.wait(), *job.reader_tasks, return_exceptions=True)
+    try:
+        await asyncio.wait_for(asyncio.shield(finished), timeout=2)
+    except asyncio.TimeoutError:
+        pass
+    finally:
+        signal_group(signal.SIGKILL)
+        await finished
+        job.exit_code = job.proc.returncode
+
+
+async def stop_all_commands():
+    jobs = tuple(_JOBS.values())
+    _JOBS.clear()
+    for job in jobs:
+        job.output_callback = None
+    await asyncio.gather(*(_stop_job(job) for job in jobs if job.status == "running"))
 
 
 def is_enabled() -> bool:
@@ -123,6 +155,31 @@ def _tail_output(stdout: bytes, stderr: bytes, command: str) -> str:
 
 def _job_tail(job: CommandJob) -> str:
     return _tail_output(b"".join(job.stdout_chunks), b"".join(job.stderr_chunks), job.command)
+
+
+def _notify_output(job: CommandJob, status: str = ""):
+    if not job.output_callback:
+        return
+    if job.include_output:
+        title = f"$ {job.command}"
+        output = "\n".join(
+            b"".join(chunks).decode("utf-8", "replace").rstrip("\n")
+            for chunks in (job.stdout_chunks, job.stderr_chunks) if chunks
+        )
+        limit = max(256, config.LOCAL_COMMAND_OUTPUT_LIMIT)
+        if len(output) > limit:
+            output = "…\n" + output[-limit:]
+        job.output_callback("\n".join(part for part in (title, output, status) if part))
+    else:
+        job.output_callback("\n".join(part for part in (status, _job_tail(job)) if part))
+
+
+def _finish_output(job: CommandJob, status: str = ""):
+    if status:
+        _notify_output(job, status)
+    if job.output_callback:
+        callback, job.output_callback = job.output_callback, None
+        callback(None)
 
 
 def _job_result(job: CommandJob) -> dict:
@@ -169,20 +226,18 @@ async def _monitor_job(job: CommandJob):
         if job.status == "running":
             job.status = "completed"
         job.exit_code = job.proc.returncode
-        if job.output_callback:
-            job.output_callback(f"job {job.status}\n{_job_tail(job)}")
-            job.output_callback(None)
+        _finish_output(job, f"job {job.status}")
         log.info("local command job %s finished status=%s exit=%s", job.job_id, job.status, job.exit_code)
     except Exception as e:
         job.status = "error"
         job.error = str(e)
-        if job.output_callback:
-            job.output_callback(f"job error\n{job.error}")
-            job.output_callback(None)
+        _finish_output(job, f"job error\n{job.error}")
         log.error("local command job %s monitor error: %s", job.job_id, e)
 
 
-async def run_local_command(params: dict, output_callback: OutputCallback | None = None) -> dict:
+async def run_local_command(
+    params: dict, output_callback: OutputCallback | None = None, *, include_output: bool = False,
+) -> dict:
     command = str(params.get("command", "")).strip()
     if not command:
         raise ValueError("command is required")
@@ -216,6 +271,7 @@ async def run_local_command(params: dict, output_callback: OutputCallback | None
             output_callback(f"$ {command}")
         proc = await asyncio.create_subprocess_shell(
             command,
+            start_new_session=True,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -224,6 +280,7 @@ async def run_local_command(params: dict, output_callback: OutputCallback | None
             output_callback(f"$ {command}")
         proc = await asyncio.create_subprocess_exec(
             *argv,
+            start_new_session=True,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -233,11 +290,11 @@ async def run_local_command(params: dict, output_callback: OutputCallback | None
         command=command,
         proc=proc,
         output_callback=output_callback,
+        include_output=include_output,
     )
 
     def notify_output():
-        if output_callback:
-            output_callback(_job_tail(job))
+        _notify_output(job)
 
     stdout_task = asyncio.create_task(_read_stream(proc.stdout, job.stdout_chunks, "stdout", notify_output))
     stderr_task = asyncio.create_task(_read_stream(proc.stderr, job.stderr_chunks, "stderr", notify_output))
@@ -246,12 +303,15 @@ async def run_local_command(params: dict, output_callback: OutputCallback | None
     try:
         await asyncio.wait_for(proc.wait(), timeout=timeout)
         await asyncio.gather(*job.reader_tasks)
+    except asyncio.CancelledError:
+        job.output_callback = None
+        await _stop_job(job)
+        raise
     except asyncio.TimeoutError:
         _JOBS[job.job_id] = job
         job.last_check_at = time.time()
         job.monitor_task = asyncio.create_task(_monitor_job(job))
-        if output_callback:
-            output_callback(f"running job {job.job_id}\n{_job_tail(job)}")
+        _notify_output(job, f"running job {job.job_id}")
         log.info("local command moved to background job=%s after %ss", job.job_id, timeout)
         return {
             "command": command,
@@ -267,8 +327,7 @@ async def run_local_command(params: dict, output_callback: OutputCallback | None
 
     job.status = "completed"
     job.exit_code = proc.returncode
-    if output_callback:
-        output_callback(None)
+    _finish_output(job, f"exit {proc.returncode}" if include_output else "")
     output_limit = max(256, config.LOCAL_COMMAND_OUTPUT_LIMIT)
     stdout = b"".join(job.stdout_chunks)
     stderr = b"".join(job.stderr_chunks)
@@ -311,18 +370,8 @@ async def stop_command(params: dict) -> dict:
     if not job:
         raise ValueError(f"unknown job_id: {job_id}")
     if job.status == "running":
-        job.status = "stopped"
-        try:
-            job.proc.terminate()
-            await asyncio.wait_for(job.proc.wait(), timeout=2)
-        except asyncio.TimeoutError:
-            job.proc.kill()
-            await job.proc.wait()
-        await asyncio.gather(*job.reader_tasks, return_exceptions=True)
-        job.exit_code = job.proc.returncode
-        if job.output_callback:
-            job.output_callback(f"job stopped\n{_job_tail(job)}")
-            job.output_callback(None)
+        await _stop_job(job)
+        _finish_output(job, "job stopped")
     result = _job_result(job)
     _JOBS.pop(job_id, None)
     return result

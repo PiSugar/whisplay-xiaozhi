@@ -46,6 +46,9 @@ class AudioRecorder:
                 self._process.wait(timeout=2)
             except Exception:
                 self._process.kill()
+                self._process.wait()
+            if self._process.stdout:
+                self._process.stdout.close()
             self._process = None
             log.info("recorder stopped")
 

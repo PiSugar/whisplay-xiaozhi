@@ -1,10 +1,12 @@
-"""Raspberry Pi camera MCP tool using rpicam-still/libcamera-still."""
+"""Camera MCP tool and viewfinder for Raspberry Pi CSI and USB cameras."""
 
 import asyncio
 import json
 import logging
 import os
+import re
 import shutil
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
@@ -16,6 +18,9 @@ from PIL import Image
 import requests
 
 import config
+from hardware.usb_camera import (
+    is_capture_device, usb_camera_device, usb_camera_required, usb_capture_command,
+)
 from protocol.mcp_handler import McpToolResult
 
 log = logging.getLogger("mcp.camera")
@@ -90,6 +95,37 @@ def configure_vision(
 
 def is_enabled() -> bool:
     return config.CAMERA_TOOL_ENABLED
+
+
+def native_viewfinder_available() -> bool:
+    if config.CAMERA_VIEWFINDER_COMMAND:
+        try:
+            _viewfinder_command()
+        except RuntimeError:
+            return False
+        return True
+    if usb_camera_required():
+        return False
+    for candidate in ("rpicam-hello", "libcamera-hello"):
+        command = shutil.which(candidate)
+        if command:
+            try:
+                result = subprocess.run(
+                    [command, "--list-cameras"], capture_output=True, text=True, timeout=3,
+                )
+                return result.returncode == 0 and bool(re.search(r"(?m)^\s*\d+\s*:", result.stdout))
+            except (OSError, subprocess.TimeoutExpired):
+                return False
+    return False
+
+
+def _selected_usb(command_override: str) -> Path | None:
+    if command_override:
+        return None
+    device = usb_camera_device()
+    if device is None and usb_camera_required():
+        raise RuntimeError(f"USB camera is disconnected: {config.USB_CAMERA_DEVICE}")
+    return device
 
 
 def _viewfinder_command() -> str:
@@ -199,10 +235,11 @@ def save_user_photo(jpeg: bytes) -> Path:
 
 
 class CameraViewfinder:
-    """Stream MJPEG frames from rpicam-vid for the button-driven viewfinder."""
+    """Stream MJPEG frames for the button-driven viewfinder."""
 
     def __init__(self, frame_callback: FrameCallback | None = None):
         self.frame_callback = frame_callback
+        self.usb_device: Path | None = None
         self.process: asyncio.subprocess.Process | None = None
         self.latest_frame: bytes | None = None
         self._reader_task: asyncio.Task | None = None
@@ -213,6 +250,30 @@ class CameraViewfinder:
     async def start(self) -> None:
         if self._running:
             return
+        self.usb_device = _selected_usb(config.CAMERA_VIEWFINDER_COMMAND)
+        if self.usb_device is not None:
+            command = usb_capture_command(
+                self.usb_device, config.CAMERA_VIEWFINDER_WIDTH, config.CAMERA_VIEWFINDER_HEIGHT,
+                config.CAMERA_VIEWFINDER_QUALITY, fps=config.CAMERA_VIEWFINDER_FPS,
+            )
+        else:
+            command = self._native_command()
+        self.process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._running = True
+        self._reader_task = asyncio.create_task(self._read_frames())
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
+        log.info("camera viewfinder started: %s", self.usb_device or "CSI")
+
+    @property
+    def ended(self) -> bool:
+        return self._reader_task is not None and self._reader_task.done()
+
+    @staticmethod
+    def _native_command() -> list[str]:
         command = [
             _viewfinder_command(),
             "--camera", str(config.CAMERA_INDEX),
@@ -234,20 +295,7 @@ class CameraViewfinder:
                     "--autofocus-speed", config.CAMERA_AUTOFOCUS_SPEED,
                 ]
             )
-        self.process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        self._running = True
-        self._reader_task = asyncio.create_task(self._read_frames())
-        self._stderr_task = asyncio.create_task(self._drain_stderr())
-        log.info(
-            "camera viewfinder started: %sx%s @ %s fps",
-            config.CAMERA_VIEWFINDER_WIDTH,
-            config.CAMERA_VIEWFINDER_HEIGHT,
-            config.CAMERA_VIEWFINDER_FPS,
-        )
+        return command
 
     async def _read_frames(self) -> None:
         if not self.process or not self.process.stdout:
@@ -305,6 +353,8 @@ class CameraViewfinder:
             await asyncio.wait_for(
                 self._frame_ready.wait(), timeout=config.CAMERA_VIEWFINDER_READY_TIMEOUT_SEC
             )
+            if self.usb_device is not None and (self.ended or not is_capture_device(self.usb_device)):
+                raise RuntimeError("USB camera disconnected")
             frame = self.latest_frame
             if not frame:
                 raise RuntimeError("camera viewfinder has no frame")
@@ -316,11 +366,17 @@ class CameraViewfinder:
         self._running = False
         process = self.process
         if process and process.returncode is None:
-            process.terminate()
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
             try:
                 await asyncio.wait_for(process.wait(), timeout=2.0)
             except asyncio.TimeoutError:
-                process.kill()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
                 await process.wait()
         current = asyncio.current_task()
         for task in (self._reader_task, self._stderr_task):
@@ -426,7 +482,7 @@ async def capture_photo(
     width = _bounded_int(params.get("width"), config.CAMERA_WIDTH, 160, 1280, "width")
     height = _bounded_int(params.get("height"), config.CAMERA_HEIGHT, 120, 960, "height")
     quality = _bounded_int(params.get("quality"), config.CAMERA_QUALITY, 30, 95, "quality")
-    camera_command = _camera_command()
+    usb_device = _selected_usb(config.CAMERA_COMMAND)
     output_dir = _output_directory()
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     output_path = output_dir / f"capture-{timestamp}-{uuid.uuid4().hex[:6]}.jpg"
@@ -434,8 +490,16 @@ async def capture_photo(
     if progress_callback:
         progress_callback("camera\nCapturing photo...")
 
+    if usb_device is not None:
+        command = usb_capture_command(usb_device, width, height, quality, output=output_path)
+    else:
+        command = _native_still_command(width, height, quality, output_path)
+    return await _capture_and_analyze(command, question, output_path, progress_callback, photo_callback)
+
+
+def _native_still_command(width, height, quality, output_path):
     command = [
-        camera_command,
+        _camera_command(),
         "--camera",
         str(config.CAMERA_INDEX),
         "--nopreview",
@@ -466,7 +530,11 @@ async def capture_photo(
             str(output_path),
         ]
     )
-    log.info("capturing camera image: %sx%s quality=%s", width, height, quality)
+    return command
+
+
+async def _capture_and_analyze(command, question, output_path, progress_callback, photo_callback):
+    log.info("capturing camera image")
     process = await asyncio.create_subprocess_exec(
         *command,
         stdout=asyncio.subprocess.PIPE,
@@ -476,10 +544,16 @@ async def capture_photo(
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=max(2.0, config.CAMERA_TIMEOUT_SEC)
         )
-    except asyncio.TimeoutError as exc:
-        process.kill()
-        await process.wait()
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        await process.communicate()
         output_path.unlink(missing_ok=True)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
         raise TimeoutError("camera capture timed out") from exc
 
     if process.returncode != 0 or not output_path.is_file():
@@ -499,7 +573,7 @@ async def capture_photo(
         output_path.unlink(missing_ok=True)
         raise
 
-    _cleanup_old_captures(output_dir, config.CAMERA_KEEP_CAPTURES)
+    _cleanup_old_captures(output_path.parent, config.CAMERA_KEEP_CAPTURES)
     log.info("camera image captured: %s (%d bytes)", output_path, len(image_bytes))
     if photo_callback:
         try:

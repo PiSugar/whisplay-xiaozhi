@@ -29,9 +29,19 @@ async def main():
     app = Application()
 
     # Graceful shutdown
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
+    main_task = asyncio.current_task()
+    shutting_down = False
+
+    def request_shutdown():
+        nonlocal shutting_down
+        if not shutting_down:
+            shutting_down = True
+            log.info("shutting down...")
+            main_task.cancel()
+
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.ensure_future(shutdown(app)))
+        loop.add_signal_handler(sig, request_shutdown)
 
     # Optionally start wake word detector
     wakeword_task = None
@@ -44,34 +54,16 @@ async def main():
         except Exception as e:
             log.warning("wake word init failed: %s", e)
 
-    await app.start()
-
-    # Keep running until cancelled
     try:
+        await app.start()
         await asyncio.Event().wait()
     except asyncio.CancelledError:
         pass
     finally:
         if wakeword_task:
             wakeword_task.cancel()
+            await asyncio.gather(wakeword_task, return_exceptions=True)
         await app.stop()
-
-
-_shutting_down = False
-
-async def shutdown(app: Application):
-    global _shutting_down
-    if _shutting_down:
-        return
-    _shutting_down = True
-    log = logging.getLogger("main")
-    log.info("shutting down...")
-    await app.stop()
-    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    for t in tasks:
-        t.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-    asyncio.get_event_loop().stop()
 
 
 if __name__ == "__main__":

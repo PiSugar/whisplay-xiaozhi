@@ -95,4 +95,11 @@ class WakeWordDetector:
             pass
         finally:
             if self._process:
-                self._process.terminate()
+                process, self._process = self._process, None
+                process.terminate()
+                try:
+                    await asyncio.to_thread(process.wait, 1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    await asyncio.to_thread(process.wait)
+                process.stdout.close()
